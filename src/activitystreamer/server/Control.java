@@ -88,7 +88,6 @@ public class Control extends Thread {
 			JSONObject message = (JSONObject) parser.parse(msg);
 //-------------------------------Invalid message : No command
 			String match = "command";
-
 			if (!msg.contains(match)) {
 				String ms = "the received message did not contain a command";
 				return sendInvalidMessage(con,ms);
@@ -99,358 +98,40 @@ public class Control extends Thread {
 				log.warn(message.get("info"));
 			}
 
-//-------------------------------receive AUTHENTICATION_FAIL (server initiation reply)
-			if (message.get("command").equals("AUTHENTICATION_FAIL")) {
-				log.warn(message.get("info"));
-				return true;
-			}
+			switch (message.get("command").toString()) {
+				case "AUTHENTICATION_FAIL":
+					log.warn(message.get("info"));
+					return true;
 
-//-------------------------------receive AUTHENTICATE (other servers to this server)
-			else if (message.get("command").equals("AUTHENTICATE")) {
-				if (message.get("secret")==null) {
-					String ms = "the received message did not contain a secret";
-					return sendInvalidMessage(con,ms);
-
-				} else if (message.size() != 2) {
-					String ms = "incorrect message";
-					return sendInvalidMessage(con,ms);
-				} else if (message.get("secret").equals(Settings.getSecret())) {
-					serverconnections.add(con);
-					sentmessage(usersinfo,con);
+				case "AUTHENTICATE":
+					return authenticate(message, con);
+				case "usersinfo":
+					usersinfo=new JSONObject();
+					usersinfo = message;
 					return false;
-				} else {
-					JSONObject authenticateFail = new JSONObject();
-					authenticateFail.put("command", "AUTHENTICATION_FAIL");
-					authenticateFail.put("info", "the supplied secret is incorrect: " + message.get("secret"));
-					sentmessage(authenticateFail, con);
-					sentmessage(usersinfo,con);
-					return true;
-				}
-			}
-//--------------------------Synchronize the userinfo for new server
-			if (message.get("command").equals("usersinfo")) {
-				usersinfo=new JSONObject();
-				usersinfo = message;
-			}
-
-//--------------------------------ACTIVITY_MESSAGE from client
-			else if (message.get("command").equals("ACTIVITY_MESSAGE")) {
-				if (message.get("username") == null || message.get("activity") == null
-						|| message.size() != 4) {
-					String ms = "incorrect message";
-					return sendInvalidMessage(con, ms);
-				}
-				if(!(loginMap.containsKey(con))){
-					JSONObject fail = new JSONObject();
-					fail.put("command", "AUTHENTICATION_FAIL");
-					fail.put("info", "must send a LOGIN message first");
-					sentmessage(fail, con);
-					return true;
-				}
-				if(usersinfo.get(message.get("username"))!=null){
-					if((loginMap.containsValue(message.get("username"))) &&
-							(usersinfo.get(message.get("username")).equals(message.get("secret")))
-							|| message.get("username").equals("anonymous")){
-						JSONObject broad = new JSONObject();
-						JSONObject act = (JSONObject) message.get("activity");
-						act.put("authenticated_user", message.get("username"));
-						broad.put("command", "ACTIVITY_BROADCAST");
-						broad.put("activity", act);
-						String activity = broad.toJSONString();
-						broadcast(activity, connections);
-						return false;
-					}
-				}
-				if(loginMap.containsValue(message.get("username"))&&
-						message.get("username").equals("anonymous")){
-					JSONObject broad = new JSONObject();
-					JSONObject act = (JSONObject) message.get("activity");
-					act.put("authenticated_user", message.get("username"));
-					broad.put("command", "ACTIVITY_BROADCAST");
-					broad.put("activity", act);
-					String activity = broad.toJSONString();
-					broadcast(activity, connections);
-					return false;
-				}
-				else {
-					JSONObject fail = new JSONObject();
-					fail.put("command", "AUTHENTICATION_FAIL");
-					fail.put("info", "username and/or secret is incorrect");
-
-					sentmessage(fail, con);
-					return true;
-				}
-			}
-//--------------------------------ACTIVITY_BROADCAST from sever
-			else if (message.get("command").equals("ACTIVITY_BROADCAST")) {
-				if(!serverconnections.contains(con)){
-					String ms = "received ACTIVITY_BROADCAST from an unauthenticated server";
-					return sendInvalidMessage(con, ms);
-				}
-				String activity = message.toJSONString();
-				sendToOthers(con, activity, connections);
-				return false;
-
-			}
-
-// --------------------------------Accept Announcement
-			else if (message.get("command").equals("SERVER_ANNOUNCE")) {
-//				log.info(message.toJSONString());
-				if (message.size() != 5) {
-					String ms = "incorrect message";
-					return sendInvalidMessage(con, ms);
-				}
-				if (!serverconnections.contains(con)) {
-					String ms = "received SERVER_ANNOUNCE from an unauthenticated server";
-					return sendInvalidMessage(con, ms);
-				}
-				log.debug("received announcement from " + message.get("id") + " load " +
-						message.get("load") + " at " +
-						message.get("hostname") + ":" + message.get("port"));
-				if (serverlist != null) {
-					boolean flag = true;
-					for (JSONObject server : serverlist) {
-						if (server.get("id").equals(message.get("id"))) {
-							server.put("load", message.get("load"));
-							flag = false;
-							break;
-
-						}
-					}
-					if (flag) {
-						JSONObject newServer = new JSONObject();
-						newServer.put("id", message.get("id"));
-						newServer.put("load", message.get("load"));
-						newServer.put("hostname", message.get("hostname"));
-						newServer.put("port", message.get("port"));
-						if (newServer != null) {
-							serverlist.add(newServer);
-						}
-					}
-					if (!redirect) {
-						if (connections.size() - serverconnections.size() - Integer.parseInt(message.get("load").toString()) > REDIRECT_LIMIT) {
-							redirect = true;
-							redirectHost = message.get("hostname").toString();
-							redirectPort = message.get("port").toString();
-						}
-					}
-				}
-
-				String announce = message.toJSONString();
-				sendToOthers(con, announce, serverconnections);
-				return false;
-			}
-
-// --------------------------------LOGIN
-			else if (message.get("command").equals("LOGIN")) {
-				String username = message.get("username").toString();
-				if (message.get("username") == null ) {
-					String ms = "incorrect message";
-					return sendInvalidMessage(con, ms);
-				}
-
-				if (usersinfo.get(message.get("username")) == null
-						&& !(message.get("username").equals("anonymous"))) {
-					JSONObject loginFailed = new JSONObject();
-					loginFailed.put("command", "LOGIN_FAILED");
-					loginFailed.put("info", "user "+message.get("username")+" is not registered");
-					sentmessage(loginFailed, con);
-					return true;
-				} else {
-					if ((message.get("username").equals("anonymous")) ||
-							(usersinfo.get(message.get("username")).equals(message.get("secret")))) {
-						//LOGIN SUCCESS, NO REDIRECT
-						if (!redirect) {
-							JSONObject loginSuccess = new JSONObject();
-							loginSuccess.put("command", "LOGIN_SUCCESS");
-							loginSuccess.put("info", "logged in as user: " + username);
-							sentmessage(loginSuccess, con);
-							loginMap.put(con,message.get("username").toString());
-							return false;
-						} else {
-							//REDIRECT
-							JSONObject redirectCommand = new JSONObject();
-							redirectCommand.put("command", "REDIRECT");
-							redirectCommand.put("hostname", redirectHost);
-							redirectCommand.put("port", redirectPort);
-							sentmessage(redirectCommand, con);
-							redirect = false;
-							log.info(message.get("username") + " has been redirected to: "
-									+ redirectHost + ":" + redirectPort);
-							return true;
-						}
-					} else {
-						//LOGIN FAILED
-						JSONObject loginFailed = new JSONObject();
-						loginFailed.put("command", "LOGIN_FAILED");
-						loginFailed.put("info", "wrong secret for user "+message.get("username"));
-						sentmessage(loginFailed, con);
-						return true;
-					}
-				}
-
-			}
-// --------------------------------LOGOUT
-			else if (message.get("command").equals("LOGOUT")) {
-				loginMap.remove(con);
-				return true;
-			}
-//-------------------------------receive REGISTER (Client to this server)
-			else if (message.get("command").equals("REGISTER")) {
-				if (message.get("secret") == null ||
-						message.get("username") == null || message.size() != 3) {
-					String ms = "incorrect message";
-					return sendInvalidMessage(con, ms);
-				}
-//----------------Invalid message: already logged in on this connection
-				if (loginMap.containsValue(con)) {
+				case "ACTIVITY_MESSAGE":
+					return acitivityMessage(message,con);
+				case "ACTIVITY_BROADCAST":
+					return acitivityBroadcast(message,con);
+				case "SERVER_ANNOUNCE":
+					return serverAnnounce(message,con);
+				case "LOGIN":
+					return login(message,con);
+				case "LOGOUT":
 					loginMap.remove(con);
-					String ms = "received "+message.get("command")+" from a client " +
-							"that has already logged in as "+message.get("username");
-					return sendInvalidMessage(con, ms);
-				}
-				//check if username has been registered with a different secret at local server
-				if ((usersinfo.get(message.get("username")) != null)) {
-					JSONObject registerFail = new JSONObject();
-					registerFail.put("command", "REGISTER_FAILED");
-					registerFail.put("info", message.get("username") + " is already registered with the system");
-					sentmessage(registerFail, con);
 					return true;
-				}
-				if ((usersinfo.get(message.get("username")) == null) && serverconnections.size() == 0) {
-					JSONObject registerSuccess = new JSONObject();
-					registerSuccess.put("command", "REGISTER_SUCCESS");
-					registerSuccess.put("info", "register success for " + message.get("username"));
-					sentmessage(registerSuccess, con);
-					usersinfo.put(message.get("username"), message.get("secret"));
-					return false;
-
-				}
-
-
-
-//-----------broadcast lock-request to other servers to check if username has been taken or not
-				else {
-					JSONObject lock_request = new JSONObject();
-					lock_request.put("command", "LOCK_REQUEST");
-					lock_request.put("username", message.get("username"));
-					lock_request.put("secret", message.get("secret"));
-					String lockrequest = lock_request.toJSONString();
-					//save the cli info and let the cli wait for the approval from other servers
-					connectionMap.put(message.get("username").toString(), con);
-					countMap.put(message.get("username").toString(), 0);
-					usersinfo.put(message.get("username"), message.get("secret"));
-					broadcast(lockrequest, serverconnections);
-					return false;
-				}
+				case "REGISTER":
+					return register(message, con);
+				case "LOCK_REQUEST":
+					return lockRequest(msg, message, con);
+				case "LOCK_DENIED":
+					return lockDenied(msg, message, con);
+				case "LOCK_ALLOWED":
+					return lockAllowed(msg,message, con);
+				default:
+					String ms = "the message contained an unknown command:"+message.get("command");
+					return sendInvalidMessage(con, ms);
 			}
-
-//-------------------------------receive LOCK_REQUEST from other servers
-			else if (message.get("command").equals("LOCK_REQUEST")) {
-
-				if (!serverconnections.contains(con)) {
-					String ms = "received LOCK_REQUEST from an unauthenticated server";
-					return sendInvalidMessage(con, ms);
-				}
-				if (message.get("secret") == null ||
-						message.get("username") == null || message.size() != 3) {
-					String ms = "incorrect message";
-					return sendInvalidMessage(con, ms);
-				}
-				sendToOthers(con, msg, serverconnections);
-				//deny the request if username has been registered with a different secret
-				if (usersinfo.get(message.get("username")) != null) {
-					JSONObject lock_denied = new JSONObject();
-					lock_denied.put("command", "LOCK_DENIED");
-					lock_denied.put("username", message.get("username"));
-					lock_denied.put("secret", message.get("secret"));
-					String lockdeny = lock_denied.toJSONString();
-					broadcast(lockdeny, serverconnections);
-					usersinfo.remove(message.get("username"));
-					return false;
-				}
-
-				//------------allow the request if no match for username has been found in the server
-				if (usersinfo.get(message.get("username")) == null) {
-					JSONObject lock_allowed = new JSONObject();
-					lock_allowed.put("command", "LOCK_ALLOWED");
-					lock_allowed.put("username", message.get("username"));
-					lock_allowed.put("secret", message.get("secret"));
-					String lockallow = lock_allowed.toJSONString();
-					//add userinfo into the registration list
-					broadcast(lockallow, serverconnections);
-					usersinfo.put(message.get("username"), message.get("secret"));
-					log.info("Register: " + "username " + "\"" + message.get("username") + "\"" +
-							" has been added into storage");
-					return false;
-				}
-			}
-//---------------------get registration removed if received lock_denied
-			else if (message.get("command").equals("LOCK_DENIED")) {
-				if (message.get("secret") == null ||
-						message.get("username") == null || message.size() != 3) {
-					String ms = "incorrect message";
-					return sendInvalidMessage(con, ms);
-				}
-				if (!serverconnections.contains(con)) {
-					String ms = "received LOCK_DENIED from an unauthenticated server";
-					return sendInvalidMessage(con, ms);
-				}
-				usersinfo.remove(message.get("username"), message.get("secret"));
-				if (connectionMap.get(message.get("username")) != null) {
-					JSONObject registerFail = new JSONObject();
-					registerFail.put("command", "REGISTER_FAILED");
-					registerFail.put("info", message.get("username") + " is already registered with the system");
-					sentmessage(registerFail, connectionMap.get(message.get("username")));
-
-					log.info("REGISTER_FAILED for: " + "\"" + message.get("username") + "\"");
-					return true;
-				} else {
-					sendToOthers(con, msg, serverconnections);
-					log.info("Register: " + "username \"" + message.get("username") + "\" has been removed");
-					return false;
-				}
-			}
-
-//-----------receive lock allowed from other server and client is not registering through this server
-			else if (message.get("command").equals("LOCK_ALLOWED")) {
-				if (message.get("secret") == null ||
-						message.get("username") == null || message.size() != 3) {
-					String ms = "incorrect message";
-					return sendInvalidMessage(con, ms);
-				}
-				if (!serverconnections.contains(con)) {
-					String ms = "received LOCK_ALLOWED from an unauthenticated server";
-					return sendInvalidMessage(con, ms);
-				}
-
-				if (countMap.get(message.get("username")) == null) {
-					sendToOthers(con, msg, serverconnections);
-					return false;
-				} else {
-					int i = countMap.get(message.get("username")) + 1;
-					if (i == serverlist.size() - 1) {
-						JSONObject registerSuccess = new JSONObject();
-						registerSuccess.put("command", "REGISTER_SUCCESS");
-						registerSuccess.put("info", "register success for " + message.get("username"));
-						sentmessage(registerSuccess, connectionMap.get(message.get("username")));
-						connectionMap.remove(message.get("username"));
-						countMap.remove(message.get("username"));
-						log.info("REGISTER_SUCCESS for: " + message.get("username"));
-						return false;
-					} else {
-						countMap.replace(message.get("username").toString(), i);
-
-						return false;
-					}
-				}
-			}
-//--------------------------------UNKNOWN COMMANDS
-			else {
-				String ms = "the message contained an unknown command:"+message.get("command");
-				return sendInvalidMessage(con, ms);
-			}
-
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
@@ -598,5 +279,316 @@ public class Control extends Thread {
 		sentmessage(invalid, con);
 		return true;
 	}
+	public boolean authenticate(JSONObject message, Connection con)throws IOException{
+		if (message.get("secret")==null) {
+			String ms = "the received message did not contain a secret";
+			return sendInvalidMessage(con,ms);
 
+		} else if (message.size() != 2) {
+			String ms = "incorrect message";
+			return sendInvalidMessage(con,ms);
+		} else if (message.get("secret").equals(Settings.getSecret())) {
+			serverconnections.add(con);
+			sentmessage(usersinfo,con);
+			return false;
+		} else {
+			JSONObject authenticateFail = new JSONObject();
+			authenticateFail.put("command", "AUTHENTICATION_FAIL");
+			authenticateFail.put("info", "the supplied secret is incorrect: " + message.get("secret"));
+			sentmessage(authenticateFail, con);
+			return true;
+		}
+	}
+	public boolean acitivityMessage(JSONObject message, Connection con)throws IOException{
+		if (message.get("username") == null || message.get("activity") == null
+				|| message.size() != 4) {
+			String ms = "incorrect message";
+			return sendInvalidMessage(con, ms);
+		}
+		if(!(loginMap.containsKey(con))){
+			JSONObject fail = new JSONObject();
+			fail.put("command", "AUTHENTICATION_FAIL");
+			fail.put("info", "must send a LOGIN message first");
+			sentmessage(fail, con);
+			return true;
+		}
+		if(usersinfo.get(message.get("username"))!=null){
+			if((loginMap.containsValue(message.get("username"))) &&
+					(usersinfo.get(message.get("username")).equals(message.get("secret")))
+					|| message.get("username").equals("anonymous")){
+				JSONObject broad = new JSONObject();
+				JSONObject act = (JSONObject) message.get("activity");
+				act.put("authenticated_user", message.get("username"));
+				broad.put("command", "ACTIVITY_BROADCAST");
+				broad.put("activity", act);
+				String activity = broad.toJSONString();
+				broadcast(activity, connections);
+				return false;
+			}
+		}
+		if(loginMap.containsValue(message.get("username"))&&
+				message.get("username").equals("anonymous")){
+			JSONObject broad = new JSONObject();
+			JSONObject act = (JSONObject) message.get("activity");
+			act.put("authenticated_user", message.get("username"));
+			broad.put("command", "ACTIVITY_BROADCAST");
+			broad.put("activity", act);
+			String activity = broad.toJSONString();
+			broadcast(activity, connections);
+			return false;
+		}
+		else {
+			JSONObject fail = new JSONObject();
+			fail.put("command", "AUTHENTICATION_FAIL");
+			fail.put("info", "username and/or secret is incorrect");
+
+			sentmessage(fail, con);
+			return true;
+		}
+	}
+	public boolean acitivityBroadcast(JSONObject message, Connection con)throws IOException{
+		if(!serverconnections.contains(con)){
+			String ms = "received ACTIVITY_BROADCAST from an unauthenticated server";
+			return sendInvalidMessage(con, ms);
+		}
+		String activity = message.toJSONString();
+		sendToOthers(con, activity, connections);
+		return false;
+	}
+	public boolean serverAnnounce (JSONObject message, Connection con)throws IOException{
+		if (message.size() != 5) {
+			String ms = "incorrect message";
+			return sendInvalidMessage(con, ms);
+		}
+		if (!serverconnections.contains(con)) {
+			String ms = "received SERVER_ANNOUNCE from an unauthenticated server";
+			return sendInvalidMessage(con, ms);
+		}
+		log.debug("received announcement from " + message.get("id") + " load " +
+				message.get("load") + " at " +
+				message.get("hostname") + ":" + message.get("port"));
+		if (serverlist != null) {
+			boolean flag = true;
+			for (JSONObject server : serverlist) {
+				if (server.get("id").equals(message.get("id"))) {
+					server.put("load", message.get("load"));
+					flag = false;
+					break;
+
+				}
+			}
+			if (flag) {
+				JSONObject newServer = new JSONObject();
+				newServer.put("id", message.get("id"));
+				newServer.put("load", message.get("load"));
+				newServer.put("hostname", message.get("hostname"));
+				newServer.put("port", message.get("port"));
+				if (newServer != null) {
+					serverlist.add(newServer);
+				}
+			}
+			if (!redirect) {
+				if (connections.size() - serverconnections.size() - Integer.parseInt(message.get("load").toString()) > REDIRECT_LIMIT) {
+					redirect = true;
+					redirectHost = message.get("hostname").toString();
+					redirectPort = message.get("port").toString();
+				}
+			}
+		}
+
+		String announce = message.toJSONString();
+		sendToOthers(con, announce, serverconnections);
+		return false;
+	}
+	public boolean login (JSONObject message, Connection con)throws IOException{
+		String username = message.get("username").toString();
+		if (message.get("username") == null ) {
+			String ms = "incorrect message";
+			return sendInvalidMessage(con, ms);
+		}
+
+		if (usersinfo.get(message.get("username")) == null
+				&& !(message.get("username").equals("anonymous"))) {
+			JSONObject loginFailed = new JSONObject();
+			loginFailed.put("command", "LOGIN_FAILED");
+			loginFailed.put("info", "user "+message.get("username")+" is not registered");
+			sentmessage(loginFailed, con);
+			return true;
+		} else {
+			if ((message.get("username").equals("anonymous")) ||
+					(usersinfo.get(message.get("username")).equals(message.get("secret")))) {
+				//LOGIN SUCCESS, NO REDIRECT
+				if (!redirect) {
+					JSONObject loginSuccess = new JSONObject();
+					loginSuccess.put("command", "LOGIN_SUCCESS");
+					loginSuccess.put("info", "logged in as user: " + username);
+					sentmessage(loginSuccess, con);
+					loginMap.put(con,message.get("username").toString());
+					return false;
+				} else {
+					//REDIRECT
+					JSONObject redirectCommand = new JSONObject();
+					redirectCommand.put("command", "REDIRECT");
+					redirectCommand.put("hostname", redirectHost);
+					redirectCommand.put("port", redirectPort);
+					sentmessage(redirectCommand, con);
+					redirect = false;
+					log.info(message.get("username") + " has been redirected to: "
+							+ redirectHost + ":" + redirectPort);
+					return true;
+				}
+			} else {
+				//LOGIN FAILED
+				JSONObject loginFailed = new JSONObject();
+				loginFailed.put("command", "LOGIN_FAILED");
+				loginFailed.put("info", "wrong secret for user "+message.get("username"));
+				sentmessage(loginFailed, con);
+				return true;
+			}
+		}
+	}
+	public boolean register (JSONObject message, Connection con)throws IOException{
+		if (message.get("secret") == null ||
+				message.get("username") == null || message.size() != 3) {
+			String ms = "incorrect message";
+			return sendInvalidMessage(con, ms);
+		}
+//----------------Invalid message: already logged in on this connection
+		if (loginMap.containsValue(con)) {
+			loginMap.remove(con);
+			String ms = "received "+message.get("command")+" from a client " +
+					"that has already logged in as "+message.get("username");
+			return sendInvalidMessage(con, ms);
+		}
+		//check if username has been registered with a different secret at local server
+		if ((usersinfo.get(message.get("username")) != null)) {
+			JSONObject registerFail = new JSONObject();
+			registerFail.put("command", "REGISTER_FAILED");
+			registerFail.put("info", message.get("username") + " is already registered with the system");
+			sentmessage(registerFail, con);
+			return true;
+		}
+		if ((usersinfo.get(message.get("username")) == null) && serverconnections.size() == 0) {
+			JSONObject registerSuccess = new JSONObject();
+			registerSuccess.put("command", "REGISTER_SUCCESS");
+			registerSuccess.put("info", "register success for " + message.get("username"));
+			sentmessage(registerSuccess, con);
+			usersinfo.put(message.get("username"), message.get("secret"));
+			return false;
+
+		}
+
+
+
+//-----------broadcast lock-request to other servers to check if username has been taken or not
+		else {
+			JSONObject lock_request = new JSONObject();
+			lock_request.put("command", "LOCK_REQUEST");
+			lock_request.put("username", message.get("username"));
+			lock_request.put("secret", message.get("secret"));
+			String lockrequest = lock_request.toJSONString();
+			//save the cli info and let the cli wait for the approval from other servers
+			connectionMap.put(message.get("username").toString(), con);
+			countMap.put(message.get("username").toString(), 0);
+			usersinfo.put(message.get("username"), message.get("secret"));
+			broadcast(lockrequest, serverconnections);
+			return false;
+		}
+	}
+	public boolean lockRequest (String msg, JSONObject message, Connection con)throws IOException{
+		if (!serverconnections.contains(con)) {
+			String ms = "received LOCK_REQUEST from an unauthenticated server";
+			return sendInvalidMessage(con, ms);
+		}
+		if (message.get("secret") == null ||
+				message.get("username") == null || message.size() != 3) {
+			String ms = "incorrect message";
+			return sendInvalidMessage(con, ms);
+		}
+		sendToOthers(con, msg, serverconnections);
+		//deny the request if username has been registered with a different secret
+		if (usersinfo.get(message.get("username")) != null) {
+			JSONObject lock_denied = new JSONObject();
+			lock_denied.put("command", "LOCK_DENIED");
+			lock_denied.put("username", message.get("username"));
+			lock_denied.put("secret", message.get("secret"));
+			String lockdeny = lock_denied.toJSONString();
+			broadcast(lockdeny, serverconnections);
+			usersinfo.remove(message.get("username"));
+			return false;
+		}
+
+		//------------allow the request if no match for username has been found in the server
+		if (usersinfo.get(message.get("username")) == null) {
+			JSONObject lock_allowed = new JSONObject();
+			lock_allowed.put("command", "LOCK_ALLOWED");
+			lock_allowed.put("username", message.get("username"));
+			lock_allowed.put("secret", message.get("secret"));
+			String lockallow = lock_allowed.toJSONString();
+			//add userinfo into the registration list
+			broadcast(lockallow, serverconnections);
+			usersinfo.put(message.get("username"), message.get("secret"));
+			log.info("Register: " + "username " + "\"" + message.get("username") + "\"" +
+					" has been added into storage");
+			return false;
+		}
+		return true;
+	}
+	public boolean lockDenied (String msg, JSONObject message, Connection con)throws IOException{
+		if (message.get("secret") == null ||
+				message.get("username") == null || message.size() != 3) {
+			String ms = "incorrect message";
+			return sendInvalidMessage(con, ms);
+		}
+		if (!serverconnections.contains(con)) {
+			String ms = "received LOCK_DENIED from an unauthenticated server";
+			return sendInvalidMessage(con, ms);
+		}
+		usersinfo.remove(message.get("username"), message.get("secret"));
+		if (connectionMap.get(message.get("username")) != null) {
+			JSONObject registerFail = new JSONObject();
+			registerFail.put("command", "REGISTER_FAILED");
+			registerFail.put("info", message.get("username") + " is already registered with the system");
+			sentmessage(registerFail, connectionMap.get(message.get("username")));
+
+			log.info("REGISTER_FAILED for: " + "\"" + message.get("username") + "\"");
+			return true;
+		} else {
+			sendToOthers(con, msg, serverconnections);
+			log.info("Register: " + "username \"" + message.get("username") + "\" has been removed");
+			return false;
+		}
+	}
+	public boolean lockAllowed (String msg, JSONObject message, Connection con)throws IOException{
+		if (message.get("secret") == null ||
+				message.get("username") == null || message.size() != 3) {
+			String ms = "incorrect message";
+			return sendInvalidMessage(con, ms);
+		}
+		if (!serverconnections.contains(con)) {
+			String ms = "received LOCK_ALLOWED from an unauthenticated server";
+			return sendInvalidMessage(con, ms);
+		}
+
+		if (countMap.get(message.get("username")) == null) {
+			sendToOthers(con, msg, serverconnections);
+			return false;
+		} else {
+			int i = countMap.get(message.get("username")) + 1;
+			if (i == serverlist.size() - 1) {
+				JSONObject registerSuccess = new JSONObject();
+				registerSuccess.put("command", "REGISTER_SUCCESS");
+				registerSuccess.put("info", "register success for " + message.get("username"));
+				sentmessage(registerSuccess, connectionMap.get(message.get("username")));
+				connectionMap.remove(message.get("username"));
+				countMap.remove(message.get("username"));
+				log.info("REGISTER_SUCCESS for: " + message.get("username"));
+				return false;
+			} else {
+				countMap.replace(message.get("username").toString(), i);
+
+				return false;
+			}
+		}
+	}
 }
