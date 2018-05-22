@@ -27,6 +27,11 @@ public class Control extends Thread {
 
 	protected static Control control = null;
 
+	private static boolean freeze = false;
+	private static int triggerParent = 0;
+	private static int triggerChild = 0;
+	private static Connection parent;
+	private static Connection child;
 	//---------------
 	private final int REDIRECT_LIMIT = 2;
 	private static ArrayList<JSONObject> serverlist;
@@ -108,12 +113,21 @@ public class Control extends Thread {
 				case "usersinfo":
 					usersinfo=new JSONObject();
 					usersinfo = message;
+
+					parent = con;
+//					parentServer =
 					return false;
 				case "ACTIVITY_MESSAGE":
 					return acitivityMessage(message,con);
 				case "ACTIVITY_BROADCAST":
 					return acitivityBroadcast(message,con);
 				case "SERVER_ANNOUNCE":
+					if (con == parent) {
+						triggerParent = 0;
+					}
+					if (con == child) {
+						triggerChild = 0;
+					}
 					return serverAnnounce(message,con);
 				case "LOGIN":
 					return login(message,con);
@@ -162,7 +176,6 @@ public class Control extends Thread {
 		log.debug("incomming connection: " + Settings.socketAddress(s));
 		Connection c = new Connection(s);
 		connections.add(c);
-//		c.start();
 		return c;
 
 	}
@@ -173,7 +186,6 @@ public class Control extends Thread {
 	public synchronized Connection outgoingConnection(Socket s) throws IOException {
 		log.debug("outgoing connection: " + Settings.socketAddress(s));
 		Connection c = new Connection(s);
-//		c.start();
 
 		JSONObject outgo = new JSONObject();
 		outgo.put("command", "AUTHENTICATE");
@@ -213,6 +225,10 @@ public class Control extends Thread {
 	}
 
 	public boolean doActivity() {
+
+
+		triggerChild = judgeConnection(triggerChild, child);
+		triggerParent = judgeConnection(triggerParent, parent);
 //--------------------------------send SERVER_ANNOUNCE between severs
 		try {
 			if (serverconnections.size() != 0) {
@@ -257,8 +273,19 @@ public class Control extends Thread {
 							"UTF-8"));
 			writer.write(msg + "\n");
 			writer.flush();
-
 		}
+	}
+
+	public int judgeConnection(int trigger, Connection con) {
+		if (trigger == 3) {
+			freeze = true;
+			connections.remove(con);
+			if (serverconnections.contains(con)) {
+				serverconnections.remove(con);
+			}
+			con.closeCon();
+		}
+		return trigger +1;
 	}
 
 	public void sendToOthers(Connection con, String msg, ArrayList<Connection> connections) throws IOException {
@@ -290,6 +317,7 @@ public class Control extends Thread {
 		} else if (message.get("secret").equals(Settings.getSecret())) {
 			serverconnections.add(con);
 			sentmessage(usersinfo,con);
+			child = con;
 			return false;
 		} else {
 			JSONObject authenticateFail = new JSONObject();
