@@ -61,7 +61,7 @@ public class Control extends Thread {
 		serverlist = new ArrayList<JSONObject>();
 		JSONObject thisServer = new JSONObject();
 		JSONObject reconnectInfo = new JSONObject();
-		reconnectInfo.put("command","reconnectInfo");
+		reconnectInfo.put("command","RECONNECT_INFO");
 
 		thisServer.put("id", Server.getId());
 		if (thisServer != null) {
@@ -146,6 +146,8 @@ public class Control extends Thread {
 					return lockDenied(msg, message, con);
 				case "LOCK_ALLOWED":
 					return lockAllowed(msg,message, con);
+				case "RECONNECT_INFO":
+					return getReconnectInfo(message);
 				default:
 					String ms = "the message contained an unknown command:"+message.get("command");
 					return sendInvalidMessage(con, ms);
@@ -181,6 +183,8 @@ public class Control extends Thread {
 		Connection c = new Connection(s);
 		connections.add(c);
 		putReconnectInfo(c);
+
+
 		return c;
 
 	}
@@ -200,6 +204,8 @@ public class Control extends Thread {
 		connections.add(c);
 		serverconnections.add(c);
 		putReconnectInfo(c);
+
+
 		return c;
 
 	}
@@ -237,7 +243,11 @@ public class Control extends Thread {
 		if (parent != null) {
 			triggerParent = judgeConnection(triggerParent, parent);
 			if (triggerParent > 3) {
-
+				try {
+					reconnection(reconnectInfo);
+				}catch (IOException e){
+					log.error("reconnection: "+e.getMessage());
+				};
 			}
 		}
 //--------------------------------send SERVER_ANNOUNCE between severs
@@ -326,6 +336,11 @@ public class Control extends Thread {
 			String ms = "incorrect message";
 			return sendInvalidMessage(con,ms);
 		} else if (message.get("secret").equals(Settings.getSecret())) {
+			if (reconnectInfo != null) {
+				if (reconnectInfo.size()>1) {
+					broadcast (reconnectInfo.toJSONString(), serverconnections);
+				}
+			}
 			serverconnections.add(con);
 			sentmessage(usersinfo,con);
 			if (reconnectInfo != null) {
@@ -638,7 +653,9 @@ public class Control extends Thread {
 
 	public static void reconnection(JSONObject reconnectInfo) throws IOException {
 		JSONObject temp = new JSONObject();
-		temp = (JSONObject) reconnectInfo.get("1");
+		if (reconnectInfo.get("1") != null) {
+			temp = (JSONObject) reconnectInfo.get("1");
+		}
 		int port = Integer.parseInt(temp.get("port").toString());
 		String ip =temp.get("ip").toString();
 		Socket s = new Socket(ip,port);
@@ -672,5 +689,10 @@ public class Control extends Thread {
 			int size = reconnectInfo.size();
 			reconnectInfo.put("size", temp);
 		}
+	}
+
+	public boolean getReconnectInfo(JSONObject message) {
+		reconnectInfo=message;
+		return false;
 	}
 }
