@@ -16,10 +16,13 @@ import org.apache.logging.log4j.Logger;
 
 import activitystreamer.server.Control;
 import activitystreamer.util.Settings;
+import org.json.simple.JSONObject;
 
 public class Server {
 	private static final Logger log = LogManager.getLogger();
 	private static final String id = Settings.nextSecret();
+
+
 
 	private static void help(Options options){
 		String header = "An ActivityStream Server for Unimelb COMP90015\n\n";
@@ -33,7 +36,9 @@ public class Server {
 	}
 
 	public static void main(String[] args) {
-		
+
+
+
 		log.info("reading command line options");
 		
 		Options options = new Options();
@@ -110,9 +115,10 @@ public class Server {
 		if(cmd.hasOption("rh")) {
 			c.initiateConnection();
 		}
+		log.warn("_________+"+Control.reconnectInfo);
 		c.start();
-		// the following shutdown hook doesn't really work, it doesn't give us enough time to
-		// cleanup all of our connections before the jvm is terminated.
+//		 the following shutdown hook doesn't really work, it doesn't give us enough time to
+//		 cleanup all of our connections before the jvm is terminated.
 		Runtime.getRuntime().addShutdownHook(new Thread() {
 			public void run() {  
 				c.setTerm(true);

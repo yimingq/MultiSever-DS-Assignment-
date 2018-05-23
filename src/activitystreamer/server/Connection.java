@@ -72,11 +72,26 @@ public class Connection extends Thread {
 			log.debug("connection closed to "+Settings.socketAddress(socket));
 			Control.getInstance().connectionClosed(this);
 			in.close();
+
+
 		} catch (IOException e) {
 			log.error("connection "+Settings.socketAddress(socket)+" closed with exception: "+e);
 			Control.getInstance().connectionClosed(this);
-
-
+		}
+		if (Control.parent == this) {
+			Control.parent =null;
+			try {
+				if (Control.reconnectInfo!=null&& Control.reconnectInfo.size()> 1) {
+				}
+				Control.reconnection(Control.reconnectInfo);
+			}catch (IOException z){
+				log.error("reconnection: "+z.getMessage());
+			}
+		}
+		for (Connection key : Control.child.keySet()) {
+			if (key == this) {
+				Control.child.remove(key);
+			}
 		}
 		open=false;
 	}

@@ -32,15 +32,15 @@ public class Control extends Thread {
 	private static int triggerParent = 0;
 	private static int triggerChild = 0;
 	public static Connection parent;
-	public static Connection child;
+	public static HashMap<Connection, Integer> child;
 	//---------------
 	private final int REDIRECT_LIMIT = 2;
 	private static ArrayList<JSONObject> serverlist;
 	private static boolean redirect = false;
 	private static String redirectHost = null;
 	private static String redirectPort = null;
+	public static JSONObject reconnectInfo;
 
-	private static JSONObject reconnectInfo;
 
 	public static Control getInstance() {
 		if (control == null) {
@@ -63,6 +63,8 @@ public class Control extends Thread {
 		JSONObject reconnectInfo = new JSONObject();
 		reconnectInfo.put("command","RECONNECT_INFO");
 
+		child = new HashMap<Connection, Integer>() ;
+
 		thisServer.put("id", Server.getId());
 		if (thisServer != null) {
 			serverlist.add(thisServer);
@@ -70,6 +72,7 @@ public class Control extends Thread {
 		// start a listener
 		try {
 			listener = new Listener();
+
 		} catch (IOException e1) {
 			log.fatal("failed to startup a listening thread: " + e1);
 			System.exit(-1);
@@ -94,6 +97,7 @@ public class Control extends Thread {
 	 */
 	public synchronized boolean process(Connection con, String msg) {
 		try {
+			log.warn("============"+reconnectInfo);
 			JSONParser parser = new JSONParser();
 			JSONObject message = (JSONObject) parser.parse(msg);
 //-------------------------------Invalid message : No command
@@ -129,9 +133,10 @@ public class Control extends Thread {
 					if (con == parent) {
 						triggerParent = 0;
 					}
-					if (con == child) {
-						triggerChild = 0;
+					for (int i=0;i<child.size();i++) {
+						child.replace(con, 0);
 					}
+
 					return serverAnnounce(message,con);
 				case "LOGIN":
 					return login(message,con);
@@ -147,7 +152,7 @@ public class Control extends Thread {
 				case "LOCK_ALLOWED":
 					return lockAllowed(msg,message, con);
 				case "RECONNECT_INFO":
-					return getReconnectInfo(message);
+					return getreconnectInfo(message);
 				default:
 					String ms = "the message contained an unknown command:"+message.get("command");
 					return sendInvalidMessage(con, ms);
@@ -182,7 +187,6 @@ public class Control extends Thread {
 		log.debug("incomming connection: " + Settings.socketAddress(s));
 		Connection c = new Connection(s);
 		connections.add(c);
-		putReconnectInfo(c);
 
 
 		return c;
@@ -203,7 +207,9 @@ public class Control extends Thread {
 
 		connections.add(c);
 		serverconnections.add(c);
-		putReconnectInfo(c);
+
+		log.warn("++++++putreconnect"+";;;;"+reconnectInfo);
+		putreconnectInfo(c);
 
 
 		return c;
@@ -212,6 +218,8 @@ public class Control extends Thread {
 
 	@Override
 	public void run() {
+
+
 		log.info("using activity interval of " + Settings.getActivityInterval() + " milliseconds");
 		while (!term) {
 			// do something with 5 second intervals in between
@@ -236,14 +244,42 @@ public class Control extends Thread {
 	}
 
 	public boolean doActivity() {
-
+		log.warn("doactivity"+reconnectInfo);
 		if (child != null) {
-			triggerChild = judgeConnection(triggerChild, child);
+			for (Connection key : child.keySet()) {
+				int m = judgeConnection(child.get(key), key);
+				child.put(key,m);
+				String temp = connectionToJson(key).toJSONString();
+				if (reconnectInfo!=null&&reconnectInfo.size()>1) {
+					for (int i = 1; i<reconnectInfo.size();i++) {
+						if (reconnectInfo.get(i).toString().equals(temp)) {
+							log.warn("remove bbbbbbbbb"+reconnectInfo);
+
+							reconnectInfo.remove(i);
+							log.warn("remove aaaaaaa"+reconnectInfo);
+
+							break;
+						}
+					}
+					try {
+						if (reconnectInfo != null && reconnectInfo.size() > 1) {
+
+							broadcast(reconnectInfo.toJSONString(), serverconnections);
+						}
+					} catch (IOException e) {
+						log.warn(e.getMessage());
+					}
+				}
+			}
+
 		}
+
 		if (parent != null) {
 			triggerParent = judgeConnection(triggerParent, parent);
 			if (triggerParent > 3) {
 				try {
+					if (reconnectInfo!=null&&reconnectInfo.size()> 1) {
+					}
 					reconnection(reconnectInfo);
 				}catch (IOException e){
 					log.error("reconnection: "+e.getMessage());
@@ -336,19 +372,24 @@ public class Control extends Thread {
 			String ms = "incorrect message";
 			return sendInvalidMessage(con,ms);
 		} else if (message.get("secret").equals(Settings.getSecret())) {
-			if (reconnectInfo != null) {
-				if (reconnectInfo.size()>1) {
-					broadcast (reconnectInfo.toJSONString(), serverconnections);
-				}
-			}
-			serverconnections.add(con);
+
 			sentmessage(usersinfo,con);
+
 			if (reconnectInfo != null) {
 				if (reconnectInfo.size()>1) {
 					sentmessage(reconnectInfo,con);
 				}
 			}
-			child = con;
+			putreconnectInfo(con);
+
+			if (reconnectInfo != null) {
+				if (reconnectInfo.size()>1) {
+					broadcast (reconnectInfo.toJSONString(), serverconnections);
+				}
+			}
+
+			serverconnections.add(con);
+			child.put(con,0);
 			return false;
 		} else {
 			JSONObject authenticateFail = new JSONObject();
@@ -650,10 +691,27 @@ public class Control extends Thread {
 			}
 		}
 	}
+	public boolean getreconnectInfo(JSONObject message) {
+
+		JSONObject me = new JSONObject();
+		me.put(Settings.getLocalHostname(),Settings.getLocalPort());
+		if (reconnectInfo.size()>1) {
+			for (int i = 1; i<reconnectInfo.size();i++) {
+				if (reconnectInfo.get(i).toString().equals(me.toJSONString())) {
+					reconnectInfo.remove(i);
+					break;
+				}
+			}
+		}
+		reconnectInfo=message;
+		return false;
+	}
+
 
 	public static void reconnection(JSONObject reconnectInfo) throws IOException {
 		JSONObject temp = new JSONObject();
-		if (reconnectInfo.get("1") != null) {
+		log.warn("**********"+reconnectInfo);
+		if (reconnectInfo!=null&&reconnectInfo.get("1") != null) {
 			temp = (JSONObject) reconnectInfo.get("1");
 		}
 		int port = Integer.parseInt(temp.get("port").toString());
@@ -682,7 +740,7 @@ public class Control extends Thread {
 		return info;
 	}
 
-	public synchronized void putReconnectInfo(Connection con){
+	public synchronized void putreconnectInfo(Connection con){
 		JSONObject temp = new JSONObject();
 		temp = connectionToJson(con);
 		if (reconnectInfo != null) {
@@ -691,8 +749,5 @@ public class Control extends Thread {
 		}
 	}
 
-	public boolean getReconnectInfo(JSONObject message) {
-		reconnectInfo=message;
-		return false;
-	}
+
 }
