@@ -3,6 +3,7 @@ package activitystreamer.server;
 import java.io.*;
 import java.net.*;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import activitystreamer.Server;
 import org.apache.logging.log4j.LogManager;
@@ -30,8 +31,8 @@ public class Control extends Thread {
 	private static boolean freeze = false;
 	private static int triggerParent = 0;
 	private static int triggerChild = 0;
-	private static Connection parent;
-	private static Connection child;
+	public static Connection parent;
+	public static Connection child;
 	//---------------
 	private final int REDIRECT_LIMIT = 2;
 	private static ArrayList<JSONObject> serverlist;
@@ -39,6 +40,7 @@ public class Control extends Thread {
 	private static String redirectHost = null;
 	private static String redirectPort = null;
 
+	private static JSONObject reconnectInfo;
 
 	public static Control getInstance() {
 		if (control == null) {
@@ -58,6 +60,9 @@ public class Control extends Thread {
 		loginMap = new HashMap<Connection,String>();
 		serverlist = new ArrayList<JSONObject>();
 		JSONObject thisServer = new JSONObject();
+		JSONObject reconnectInfo = new JSONObject();
+		reconnectInfo.put("command","reconnectInfo");
+
 		thisServer.put("id", Server.getId());
 		if (thisServer != null) {
 			serverlist.add(thisServer);
@@ -113,7 +118,6 @@ public class Control extends Thread {
 				case "usersinfo":
 					usersinfo=new JSONObject();
 					usersinfo = message;
-
 					parent = con;
 //					parentServer =
 					return false;
@@ -176,6 +180,7 @@ public class Control extends Thread {
 		log.debug("incomming connection: " + Settings.socketAddress(s));
 		Connection c = new Connection(s);
 		connections.add(c);
+		putReconnectInfo(c);
 		return c;
 
 	}
@@ -190,11 +195,11 @@ public class Control extends Thread {
 		JSONObject outgo = new JSONObject();
 		outgo.put("command", "AUTHENTICATE");
 		outgo.put("secret", Settings.getSecret());
-
 		sentmessage(outgo, c);
 
 		connections.add(c);
 		serverconnections.add(c);
+		putReconnectInfo(c);
 		return c;
 
 	}
@@ -226,9 +231,15 @@ public class Control extends Thread {
 
 	public boolean doActivity() {
 
+		if (child != null) {
+			triggerChild = judgeConnection(triggerChild, child);
+		}
+		if (parent != null) {
+			triggerParent = judgeConnection(triggerParent, parent);
+			if (triggerParent > 3) {
 
-		triggerChild = judgeConnection(triggerChild, child);
-		triggerParent = judgeConnection(triggerParent, parent);
+			}
+		}
 //--------------------------------send SERVER_ANNOUNCE between severs
 		try {
 			if (serverconnections.size() != 0) {
@@ -255,7 +266,7 @@ public class Control extends Thread {
 		return connections;
 	}
 
-	public void sentmessage(JSONObject json, Connection con) throws IOException {
+	public static void sentmessage(JSONObject json, Connection con) throws IOException {
 		Socket s = con.getSocket();
 		BufferedWriter writer = new BufferedWriter(
 				new OutputStreamWriter(s.getOutputStream(),
@@ -317,6 +328,11 @@ public class Control extends Thread {
 		} else if (message.get("secret").equals(Settings.getSecret())) {
 			serverconnections.add(con);
 			sentmessage(usersinfo,con);
+			if (reconnectInfo != null) {
+				if (reconnectInfo.size()>1) {
+					sentmessage(reconnectInfo,con);
+				}
+			}
 			child = con;
 			return false;
 		} else {
@@ -617,6 +633,44 @@ public class Control extends Thread {
 
 				return false;
 			}
+		}
+	}
+
+	public static void reconnection(JSONObject reconnectInfo) throws IOException {
+		JSONObject temp = new JSONObject();
+		temp = (JSONObject) reconnectInfo.get("1");
+		int port = Integer.parseInt(temp.get("port").toString());
+		String ip =temp.get("ip").toString();
+		Socket s = new Socket(ip,port);
+
+		log.debug("Reconnection begin" );
+		Connection c = new Connection(s);
+
+		JSONObject outgo = new JSONObject();
+		outgo.put("command", "AUTHENTICATE");
+		outgo.put("secret", Settings.getSecret());
+
+		sentmessage(outgo, c);
+
+		connections.add(c);
+		serverconnections.add(c);
+	}
+
+	public JSONObject connectionToJson(Connection con) {
+		String ip = con.getSocket().getInetAddress().toString();
+		int port = con.getSocket().getPort();
+		JSONObject info = new JSONObject();
+		info.put("ip",ip);
+		info.put("port", port);
+		return info;
+	}
+
+	public synchronized void putReconnectInfo(Connection con){
+		JSONObject temp = new JSONObject();
+		temp = connectionToJson(con);
+		if (reconnectInfo != null) {
+			int size = reconnectInfo.size();
+			reconnectInfo.put("size", temp);
 		}
 	}
 }
