@@ -115,7 +115,6 @@ public class Server {
 		if(cmd.hasOption("rh")) {
 			c.initiateConnection();
 		}
-		log.warn("_________+"+Control.reconnectInfo);
 		c.start();
 //		 the following shutdown hook doesn't really work, it doesn't give us enough time to
 //		 cleanup all of our connections before the jvm is terminated.

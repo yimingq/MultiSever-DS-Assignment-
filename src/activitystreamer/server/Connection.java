@@ -13,6 +13,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import activitystreamer.util.Settings;
+import org.json.simple.JSONObject;
 
 
 public class Connection extends Thread {
@@ -78,20 +79,31 @@ public class Connection extends Thread {
 			log.error("connection "+Settings.socketAddress(socket)+" closed with exception: "+e);
 			Control.getInstance().connectionClosed(this);
 		}
+		//做为子重连接
 		if (Control.parent == this) {
 			Control.parent =null;
 			try {
-				if (Control.reconnectInfo!=null&& Control.reconnectInfo.size()> 1) {
+				if (Control.getReconnectUse().size() > 1) {
+					Control.reconnection(Control.getReconnectUse());
+				} else {
+					JSONObject obj = new JSONObject();
+					obj.put("command", "RECONNECT_INFO");
+					Control.setReconnectInfo(obj);
+					Control.broadcast(obj.toJSONString(),Control.getServerConnections());
 				}
-				Control.reconnection(Control.reconnectInfo);
-			}catch (IOException z){
+
+			}catch (Exception z){
 				log.error("reconnection: "+z.getMessage());
 			}
 		}
-		for (Connection key : Control.child.keySet()) {
+
+		//作为父
+		for (Connection key : Control.child.keySet()){
 			if (key == this) {
 				Control.child.remove(key);
+				Control.rootChangeReconnectInfo(key);
 			}
+
 		}
 		open=false;
 	}

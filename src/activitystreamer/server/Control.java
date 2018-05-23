@@ -22,9 +22,9 @@ public class Control extends Thread {
 	private static Listener listener;
 	private static JSONObject usersinfo;
 	private static JSONObject thisSever;
-	private static HashMap<String,Connection> connectionMap;
-	private static HashMap<String,Integer> countMap;
-	private static HashMap<Connection,String> loginMap;
+	private static HashMap<String, Connection> connectionMap;
+	private static HashMap<String, Integer> countMap;
+	private static HashMap<Connection, String> loginMap;
 
 	protected static Control control = null;
 
@@ -39,8 +39,19 @@ public class Control extends Thread {
 	private static boolean redirect = false;
 	private static String redirectHost = null;
 	private static String redirectPort = null;
-	public static JSONObject reconnectInfo;
+	private static JSONObject reconnectInfo;
+	private static JSONObject reconnectUse;
 
+	public static void setReconnectInfo(JSONObject obj) {
+		reconnectInfo = obj;
+	}
+
+	public static ArrayList<Connection> getServerConnections() {
+		return serverconnections;
+	}
+	public static JSONObject getReconnectUse() {
+		return reconnectUse;
+	}
 
 	public static Control getInstance() {
 		if (control == null) {
@@ -49,21 +60,23 @@ public class Control extends Thread {
 		return control;
 	}
 
+
 	public Control() {
 		// initialize the connections array
 		connections = new ArrayList<Connection>();
 		serverconnections = new ArrayList<Connection>();
-		connectionMap = new HashMap<String,Connection>();
-		countMap = new HashMap<String,Integer>();
+		connectionMap = new HashMap<String, Connection>();
+		countMap = new HashMap<String, Integer>();
 		usersinfo = new JSONObject();
 		usersinfo.put("command", "usersinfo");
-		loginMap = new HashMap<Connection,String>();
+		reconnectInfo = new JSONObject();
+		reconnectInfo.put("command", "RECONNECT_INFO");
+		loginMap = new HashMap<Connection, String>();
 		serverlist = new ArrayList<JSONObject>();
 		JSONObject thisServer = new JSONObject();
-		JSONObject reconnectInfo = new JSONObject();
-		reconnectInfo.put("command","RECONNECT_INFO");
 
-		child = new HashMap<Connection, Integer>() ;
+
+		child = new HashMap<Connection, Integer>();
 
 		thisServer.put("id", Server.getId());
 		if (thisServer != null) {
@@ -97,17 +110,17 @@ public class Control extends Thread {
 	 */
 	public synchronized boolean process(Connection con, String msg) {
 		try {
-			log.warn("============"+reconnectInfo);
+			log.warn("============" + msg);
 			JSONParser parser = new JSONParser();
 			JSONObject message = (JSONObject) parser.parse(msg);
 //-------------------------------Invalid message : No command
 			String match = "command";
 			if (!msg.contains(match)) {
 				String ms = "the received message did not contain a command";
-				return sendInvalidMessage(con,ms);
+				return sendInvalidMessage(con, ms);
 			}
-			log.debug("received a "+message.get("command")+" from "+
-					con.getSocket().getInetAddress()+"/"+con.getSocket().getLocalPort());
+			log.debug("received a " + message.get("command") + " from " +
+					con.getSocket().getInetAddress() + "/" + con.getSocket().getPort());
 			if (message.get("command").equals("INVALID_MESSAGE")) {
 				log.warn(message.get("info"));
 			}
@@ -120,26 +133,25 @@ public class Control extends Thread {
 				case "AUTHENTICATE":
 					return authenticate(message, con);
 				case "usersinfo":
-					usersinfo=new JSONObject();
+					usersinfo = new JSONObject();
 					usersinfo = message;
 					parent = con;
 //					parentServer =
 					return false;
 				case "ACTIVITY_MESSAGE":
-					return acitivityMessage(message,con);
+					return acitivityMessage(message, con);
 				case "ACTIVITY_BROADCAST":
-					return acitivityBroadcast(message,con);
+					return acitivityBroadcast(message, con);
 				case "SERVER_ANNOUNCE":
 					if (con == parent) {
 						triggerParent = 0;
 					}
-					for (int i=0;i<child.size();i++) {
+					for (int i = 0; i < child.size(); i++) {
 						child.replace(con, 0);
 					}
-
-					return serverAnnounce(message,con);
+					return serverAnnounce(message, con);
 				case "LOGIN":
-					return login(message,con);
+					return login(message, con);
 				case "LOGOUT":
 					loginMap.remove(con);
 					return true;
@@ -150,11 +162,11 @@ public class Control extends Thread {
 				case "LOCK_DENIED":
 					return lockDenied(msg, message, con);
 				case "LOCK_ALLOWED":
-					return lockAllowed(msg,message, con);
+					return lockAllowed(msg, message, con);
 				case "RECONNECT_INFO":
 					return getreconnectInfo(message);
 				default:
-					String ms = "the message contained an unknown command:"+message.get("command");
+					String ms = "the message contained an unknown command:" + message.get("command");
 					return sendInvalidMessage(con, ms);
 			}
 		} catch (Exception e) {
@@ -166,7 +178,7 @@ public class Control extends Thread {
 	/*
 	 * The connection has been closed by the other party.
 	 */
-	public synchronized void connectionClosed(Connection con) {
+	public static synchronized void connectionClosed(Connection con) {
 		if (!term) {
 			connections.remove(con);
 			if (serverconnections.contains(con)) {
@@ -208,7 +220,6 @@ public class Control extends Thread {
 		connections.add(c);
 		serverconnections.add(c);
 
-		log.warn("++++++putreconnect"+";;;;"+reconnectInfo);
 		putreconnectInfo(c);
 
 
@@ -244,31 +255,17 @@ public class Control extends Thread {
 	}
 
 	public boolean doActivity() {
-		log.warn("doactivity"+reconnectInfo);
+		log.warn("000000000000000" + reconnectUse);
+		log.warn("infoinfo========="+reconnectInfo);
 		if (child != null) {
 			for (Connection key : child.keySet()) {
-				int m = judgeConnection(child.get(key), key);
-				child.put(key,m);
-				String temp = connectionToJson(key).toJSONString();
-				if (reconnectInfo!=null&&reconnectInfo.size()>1) {
-					for (int i = 1; i<reconnectInfo.size();i++) {
-						if (reconnectInfo.get(i).toString().equals(temp)) {
-							log.warn("remove bbbbbbbbb"+reconnectInfo);
+				if (child.get(key) == 3) {
+					rootChangeReconnectInfo(key);
+// 作为根节点， 或者reconnectInfo是断掉的server
 
-							reconnectInfo.remove(i);
-							log.warn("remove aaaaaaa"+reconnectInfo);
-
-							break;
-						}
-					}
-					try {
-						if (reconnectInfo != null && reconnectInfo.size() > 1) {
-
-							broadcast(reconnectInfo.toJSONString(), serverconnections);
-						}
-					} catch (IOException e) {
-						log.warn(e.getMessage());
-					}
+				} else {
+					int i = child.get(key) + 1;
+					child.put(key, i);
 				}
 			}
 
@@ -276,14 +273,19 @@ public class Control extends Thread {
 
 		if (parent != null) {
 			triggerParent = judgeConnection(triggerParent, parent);
-			if (triggerParent > 3) {
+			if (triggerParent == 3) {
 				try {
-					if (reconnectInfo!=null&&reconnectInfo.size()> 1) {
+					if (reconnectUse.size() > 1) {
+						reconnection(reconnectUse);
+					} else {
+						reconnectInfo.clear();
+						reconnectInfo.put("command", "RECONNECT_INFO");
+						broadcast(reconnectInfo.toJSONString(),serverconnections);
 					}
-					reconnection(reconnectInfo);
-				}catch (IOException e){
-					log.error("reconnection: "+e.getMessage());
-				};
+				} catch (Exception e) {
+					log.error("reconnection: " + e.getMessage());
+				}
+				;
 			}
 		}
 //--------------------------------send SERVER_ANNOUNCE between severs
@@ -322,7 +324,7 @@ public class Control extends Thread {
 	}
 
 
-	public synchronized void broadcast(String msg, ArrayList<Connection> connections) throws IOException {
+	public synchronized static void broadcast(String msg, ArrayList<Connection> connections) throws IOException {
 		for (Connection con : connections) {
 			Socket s = con.getSocket();
 			BufferedWriter writer = new BufferedWriter(
@@ -342,7 +344,7 @@ public class Control extends Thread {
 			}
 			con.closeCon();
 		}
-		return trigger +1;
+		return trigger + 1;
 	}
 
 	public void sendToOthers(Connection con, String msg, ArrayList<Connection> connections) throws IOException {
@@ -356,40 +358,39 @@ public class Control extends Thread {
 		broadcast(msg, temp);
 	}
 
-	public boolean sendInvalidMessage(Connection con, String msg)throws IOException{
+	public boolean sendInvalidMessage(Connection con, String msg) throws IOException {
 		JSONObject invalid = new JSONObject();
 		invalid.put("command", "INVALID_MESSAGE");
 		invalid.put("info", msg);
 		sentmessage(invalid, con);
 		return true;
 	}
-	public boolean authenticate(JSONObject message, Connection con)throws IOException{
-		if (message.get("secret")==null) {
+
+	public boolean authenticate(JSONObject message, Connection con) throws IOException {
+		if (message.get("secret") == null) {
 			String ms = "the received message did not contain a secret";
-			return sendInvalidMessage(con,ms);
+			return sendInvalidMessage(con, ms);
 
 		} else if (message.size() != 2) {
 			String ms = "incorrect message";
-			return sendInvalidMessage(con,ms);
+			return sendInvalidMessage(con, ms);
 		} else if (message.get("secret").equals(Settings.getSecret())) {
 
-			sentmessage(usersinfo,con);
-
+			sentmessage(usersinfo, con);
 			if (reconnectInfo != null) {
-				if (reconnectInfo.size()>1) {
-					sentmessage(reconnectInfo,con);
+
+//一定有父或子
+				if (reconnectInfo.size() > 1) {
+					sentmessage(reconnectInfo, con);
+				} else {
+
+//是根节点，而且没有子
+					putreconnectInfo(con);
+
 				}
 			}
-			putreconnectInfo(con);
-
-			if (reconnectInfo != null) {
-				if (reconnectInfo.size()>1) {
-					broadcast (reconnectInfo.toJSONString(), serverconnections);
-				}
-			}
-
 			serverconnections.add(con);
-			child.put(con,0);
+			child.put(con, 0);
 			return false;
 		} else {
 			JSONObject authenticateFail = new JSONObject();
@@ -399,23 +400,24 @@ public class Control extends Thread {
 			return true;
 		}
 	}
-	public boolean acitivityMessage(JSONObject message, Connection con)throws IOException{
+
+	public boolean acitivityMessage(JSONObject message, Connection con) throws IOException {
 		if (message.get("username") == null || message.get("activity") == null
 				|| message.size() != 4) {
 			String ms = "incorrect message";
 			return sendInvalidMessage(con, ms);
 		}
-		if(!(loginMap.containsKey(con))){
+		if (!(loginMap.containsKey(con))) {
 			JSONObject fail = new JSONObject();
 			fail.put("command", "AUTHENTICATION_FAIL");
 			fail.put("info", "must send a LOGIN message first");
 			sentmessage(fail, con);
 			return true;
 		}
-		if(usersinfo.get(message.get("username"))!=null){
-			if((loginMap.containsValue(message.get("username"))) &&
+		if (usersinfo.get(message.get("username")) != null) {
+			if ((loginMap.containsValue(message.get("username"))) &&
 					(usersinfo.get(message.get("username")).equals(message.get("secret")))
-					|| message.get("username").equals("anonymous")){
+					|| message.get("username").equals("anonymous")) {
 				JSONObject broad = new JSONObject();
 				JSONObject act = (JSONObject) message.get("activity");
 				act.put("authenticated_user", message.get("username"));
@@ -426,8 +428,8 @@ public class Control extends Thread {
 				return false;
 			}
 		}
-		if(loginMap.containsValue(message.get("username"))&&
-				message.get("username").equals("anonymous")){
+		if (loginMap.containsValue(message.get("username")) &&
+				message.get("username").equals("anonymous")) {
 			JSONObject broad = new JSONObject();
 			JSONObject act = (JSONObject) message.get("activity");
 			act.put("authenticated_user", message.get("username"));
@@ -436,8 +438,7 @@ public class Control extends Thread {
 			String activity = broad.toJSONString();
 			broadcast(activity, connections);
 			return false;
-		}
-		else {
+		} else {
 			JSONObject fail = new JSONObject();
 			fail.put("command", "AUTHENTICATION_FAIL");
 			fail.put("info", "username and/or secret is incorrect");
@@ -446,8 +447,9 @@ public class Control extends Thread {
 			return true;
 		}
 	}
-	public boolean acitivityBroadcast(JSONObject message, Connection con)throws IOException{
-		if(!serverconnections.contains(con)){
+
+	public boolean acitivityBroadcast(JSONObject message, Connection con) throws IOException {
+		if (!serverconnections.contains(con)) {
 			String ms = "received ACTIVITY_BROADCAST from an unauthenticated server";
 			return sendInvalidMessage(con, ms);
 		}
@@ -455,7 +457,8 @@ public class Control extends Thread {
 		sendToOthers(con, activity, connections);
 		return false;
 	}
-	public boolean serverAnnounce (JSONObject message, Connection con)throws IOException{
+
+	public boolean serverAnnounce(JSONObject message, Connection con) throws IOException {
 		if (message.size() != 5) {
 			String ms = "incorrect message";
 			return sendInvalidMessage(con, ms);
@@ -500,9 +503,10 @@ public class Control extends Thread {
 		sendToOthers(con, announce, serverconnections);
 		return false;
 	}
-	public boolean login (JSONObject message, Connection con)throws IOException{
+
+	public boolean login(JSONObject message, Connection con) throws IOException {
 		String username = message.get("username").toString();
-		if (message.get("username") == null ) {
+		if (message.get("username") == null) {
 			String ms = "incorrect message";
 			return sendInvalidMessage(con, ms);
 		}
@@ -511,7 +515,7 @@ public class Control extends Thread {
 				&& !(message.get("username").equals("anonymous"))) {
 			JSONObject loginFailed = new JSONObject();
 			loginFailed.put("command", "LOGIN_FAILED");
-			loginFailed.put("info", "user "+message.get("username")+" is not registered");
+			loginFailed.put("info", "user " + message.get("username") + " is not registered");
 			sentmessage(loginFailed, con);
 			return true;
 		} else {
@@ -523,7 +527,7 @@ public class Control extends Thread {
 					loginSuccess.put("command", "LOGIN_SUCCESS");
 					loginSuccess.put("info", "logged in as user: " + username);
 					sentmessage(loginSuccess, con);
-					loginMap.put(con,message.get("username").toString());
+					loginMap.put(con, message.get("username").toString());
 					return false;
 				} else {
 					//REDIRECT
@@ -541,13 +545,14 @@ public class Control extends Thread {
 				//LOGIN FAILED
 				JSONObject loginFailed = new JSONObject();
 				loginFailed.put("command", "LOGIN_FAILED");
-				loginFailed.put("info", "wrong secret for user "+message.get("username"));
+				loginFailed.put("info", "wrong secret for user " + message.get("username"));
 				sentmessage(loginFailed, con);
 				return true;
 			}
 		}
 	}
-	public boolean register (JSONObject message, Connection con)throws IOException{
+
+	public boolean register(JSONObject message, Connection con) throws IOException {
 		if (message.get("secret") == null ||
 				message.get("username") == null || message.size() != 3) {
 			String ms = "incorrect message";
@@ -556,8 +561,8 @@ public class Control extends Thread {
 //----------------Invalid message: already logged in on this connection
 		if (loginMap.containsValue(con)) {
 			loginMap.remove(con);
-			String ms = "received "+message.get("command")+" from a client " +
-					"that has already logged in as "+message.get("username");
+			String ms = "received " + message.get("command") + " from a client " +
+					"that has already logged in as " + message.get("username");
 			return sendInvalidMessage(con, ms);
 		}
 		//check if username has been registered with a different secret at local server
@@ -579,7 +584,6 @@ public class Control extends Thread {
 		}
 
 
-
 //-----------broadcast lock-request to other servers to check if username has been taken or not
 		else {
 			JSONObject lock_request = new JSONObject();
@@ -595,7 +599,8 @@ public class Control extends Thread {
 			return false;
 		}
 	}
-	public boolean lockRequest (String msg, JSONObject message, Connection con)throws IOException{
+
+	public boolean lockRequest(String msg, JSONObject message, Connection con) throws IOException {
 		if (!serverconnections.contains(con)) {
 			String ms = "received LOCK_REQUEST from an unauthenticated server";
 			return sendInvalidMessage(con, ms);
@@ -634,7 +639,8 @@ public class Control extends Thread {
 		}
 		return true;
 	}
-	public boolean lockDenied (String msg, JSONObject message, Connection con)throws IOException{
+
+	public boolean lockDenied(String msg, JSONObject message, Connection con) throws IOException {
 		if (message.get("secret") == null ||
 				message.get("username") == null || message.size() != 3) {
 			String ms = "incorrect message";
@@ -659,7 +665,8 @@ public class Control extends Thread {
 			return false;
 		}
 	}
-	public boolean lockAllowed (String msg, JSONObject message, Connection con)throws IOException{
+
+	public boolean lockAllowed(String msg, JSONObject message, Connection con) throws IOException {
 		if (message.get("secret") == null ||
 				message.get("username") == null || message.size() != 3) {
 			String ms = "incorrect message";
@@ -691,63 +698,88 @@ public class Control extends Thread {
 			}
 		}
 	}
+
 	public boolean getreconnectInfo(JSONObject message) {
 
-		JSONObject me = new JSONObject();
-		me.put(Settings.getLocalHostname(),Settings.getLocalPort());
-		if (reconnectInfo.size()>1) {
-			for (int i = 1; i<reconnectInfo.size();i++) {
-				if (reconnectInfo.get(i).toString().equals(me.toJSONString())) {
-					reconnectInfo.remove(i);
-					break;
-				}
-			}
-		}
-		reconnectInfo=message;
+		reconnectUse = message;
 		return false;
 	}
 
 
-	public static void reconnection(JSONObject reconnectInfo) throws IOException {
+	public static void reconnection(JSONObject reconnectUse) throws IOException {
 		JSONObject temp = new JSONObject();
-		log.warn("**********"+reconnectInfo);
-		if (reconnectInfo!=null&&reconnectInfo.get("1") != null) {
-			temp = (JSONObject) reconnectInfo.get("1");
+		try {
+			temp = (JSONObject) reconnectUse.get("info");
+			int port = Integer.parseInt(temp.get("port").toString());
+			String ip = temp.get("ip").toString();
+			Socket s = new Socket(ip, port);
+
+
+			log.debug("Reconnection begin！！");
+			Connection c = new Connection(s);
+
+			JSONObject outgo = new JSONObject();
+			outgo.put("command", "AUTHENTICATE");
+			outgo.put("secret", Settings.getSecret());
+
+			sentmessage(outgo, c);
+
+			connections.add(c);
+			serverconnections.add(c);
+			reconnectInfo.clear();
+			reconnectInfo.put("command", "RECONNECT_INFO");
+			reconnectInfo.put("info", temp);
+
+		} catch (Exception e) {
+			e.getMessage();
 		}
-		int port = Integer.parseInt(temp.get("port").toString());
-		String ip =temp.get("ip").toString();
-		Socket s = new Socket(ip,port);
 
-		log.debug("Reconnection begin" );
-		Connection c = new Connection(s);
-
-		JSONObject outgo = new JSONObject();
-		outgo.put("command", "AUTHENTICATE");
-		outgo.put("secret", Settings.getSecret());
-
-		sentmessage(outgo, c);
-
-		connections.add(c);
-		serverconnections.add(c);
 	}
 
-	public JSONObject connectionToJson(Connection con) {
-		String ip = con.getSocket().getInetAddress().toString();
+	public static JSONObject connectionToJson(Connection con) {
+		String ip = con.getSocket().getInetAddress().getHostAddress();
 		int port = con.getSocket().getPort();
 		JSONObject info = new JSONObject();
-		info.put("ip",ip);
+		info.put("ip", ip);
 		info.put("port", port);
 		return info;
 	}
 
-	public synchronized void putreconnectInfo(Connection con){
+	public synchronized void putreconnectInfo(Connection con) {
 		JSONObject temp = new JSONObject();
 		temp = connectionToJson(con);
-		if (reconnectInfo != null) {
-			int size = reconnectInfo.size();
-			reconnectInfo.put("size", temp);
-		}
+		reconnectInfo.clear();
+		reconnectInfo.put("command", "RECONNECT_INFO");
+		reconnectInfo.put("info", temp);
+
 	}
 
+	public static void rootChangeReconnectInfo(Connection key) {
+		try {
+			JSONObject temp = connectionToJson(key);
+//	一定没有父节点,是根
+			if (reconnectInfo.get("info") == temp) {
+				for (JSONObject c : serverlist) {
+					if (!((c.get("hostname").equals(temp.get("ip")))
+							&& (c.get("port").equals(temp.get("port"))))) {
+						temp.clear();
+						temp.put("ip", c.get("hostname"));
+						temp.put("port", c.get("port"));
 
+						reconnectInfo.clear();
+						reconnectInfo.put("command", "RECONNECT_INFO");
+						reconnectInfo.put("info", temp);
+						key.closeCon();
+						connectionClosed(key);
+						broadcast(reconnectInfo.toJSONString(), serverconnections);
+						break;
+					}
+				}
+
+			}
+
+		} catch (Exception e) {
+			e.getMessage();
+		}
+	}
 }
