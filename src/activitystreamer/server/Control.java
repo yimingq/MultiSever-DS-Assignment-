@@ -3,7 +3,6 @@ package activitystreamer.server;
 import java.io.*;
 import java.net.*;
 import java.util.*;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 import activitystreamer.Server;
 import org.apache.logging.log4j.LogManager;
@@ -21,16 +20,16 @@ public class Control extends Thread {
 	private static boolean term = false;
 	private static Listener listener;
 	private static JSONObject usersinfo;
-	private static JSONObject thisSever;
 	private static HashMap<String, Connection> connectionMap;
 	private static HashMap<String, Integer> countMap;
 	private static HashMap<Connection, String> loginMap;
+	private static HashMap<String,JSONObject> allServerLoad;
+	private static HashMap<Connection, Integer> connectionRemotePort;
 
 	protected static Control control = null;
 
 	private static boolean freeze = false;
 	private static int triggerParent = 0;
-	private static int triggerChild = 0;
 	public static Connection parent;
 	public static HashMap<Connection, Integer> child;
 	//---------------
@@ -74,8 +73,8 @@ public class Control extends Thread {
 		loginMap = new HashMap<Connection, String>();
 		serverlist = new ArrayList<JSONObject>();
 		JSONObject thisServer = new JSONObject();
-
-
+		allServerLoad = new HashMap<String, JSONObject>();
+		connectionRemotePort = new HashMap<Connection,Integer>();
 		child = new HashMap<Connection, Integer>();
 
 		thisServer.put("id", Server.getId());
@@ -165,6 +164,20 @@ public class Control extends Thread {
 					return lockAllowed(msg, message, con);
 				case "RECONNECT_INFO":
 					return getreconnectInfo(message);
+				case "SERVER_UPDATE":
+					return serverUpdate(message,con);
+				case "REMOTE_PORT":
+					JSONObject info = new JSONObject();
+					info.put("port", message.get("port"));
+					info.put("ip",con.getSocket().getInetAddress().getHostAddress());
+					reconnectInfo.put("info", info);
+
+					try {
+						connectionRemotePort.put(con, (Integer) message.get("port"));
+					} catch (Exception e) {
+						e.getMessage();
+					}
+					return false;
 				default:
 					String ms = "the message contained an unknown command:" + message.get("command");
 					return sendInvalidMessage(con, ms);
@@ -212,6 +225,7 @@ public class Control extends Thread {
 		log.debug("outgoing connection: " + Settings.socketAddress(s));
 		Connection c = new Connection(s);
 
+
 		JSONObject outgo = new JSONObject();
 		outgo.put("command", "AUTHENTICATE");
 		outgo.put("secret", Settings.getSecret());
@@ -220,6 +234,12 @@ public class Control extends Thread {
 		connections.add(c);
 		serverconnections.add(c);
 
+		connectionRemotePort.put(c,Settings.getRemotePort());
+		JSONObject p = new JSONObject();
+		p.put("command", "REMOTE_PORT");
+		p.put("port", Settings.getLocalPort());
+
+		sentmessage(p,c);
 		putreconnectInfo(c);
 
 
@@ -255,8 +275,6 @@ public class Control extends Thread {
 	}
 
 	public boolean doActivity() {
-		log.warn("000000000000000" + reconnectUse);
-		log.warn("infoinfo========="+reconnectInfo);
 		if (child != null) {
 			for (Connection key : child.keySet()) {
 				if (child.get(key) == 3) {
@@ -285,24 +303,10 @@ public class Control extends Thread {
 				} catch (Exception e) {
 					log.error("reconnection: " + e.getMessage());
 				}
-				;
 			}
 		}
 //--------------------------------send SERVER_ANNOUNCE between severs
-		try {
-			if (serverconnections.size() != 0) {
-				JSONObject announce = new JSONObject();
-				announce.put("command", "SERVER_ANNOUNCE");
-				announce.put("id", Server.getId());
-				announce.put("load", connections.size() - serverconnections.size());
-				announce.put("hostname", Settings.getLocalHostname());
-				announce.put("port", Settings.getLocalPort());
-				String announcement = announce.toJSONString();
-				broadcast(announcement, serverconnections);
-			}
-		} catch (Exception e) {
-			e.printStackTrace();
-		}
+		sendServerAnnounce("SERVER_ANNOUNCE");
 		return false;
 	}
 
@@ -377,6 +381,7 @@ public class Control extends Thread {
 		} else if (message.get("secret").equals(Settings.getSecret())) {
 
 			sentmessage(usersinfo, con);
+			JSONObject p =new JSONObject();
 			if (reconnectInfo != null) {
 
 //一定有父或子
@@ -389,7 +394,10 @@ public class Control extends Thread {
 
 				}
 			}
+
 			serverconnections.add(con);
+
+			sendServerAnnounce("SERVER_UPDATE");
 			child.put(con, 0);
 			return false;
 		} else {
@@ -699,12 +707,28 @@ public class Control extends Thread {
 		}
 	}
 
+	public boolean serverUpdate(JSONObject message, Connection con){
+		String id = message.get("id").toString();
+		try {
+			JSONObject temp = new JSONObject();
+			temp.put("load", message.get("load"));
+			temp.put("port", message.get("port"));
+			temp.put("hostname", message.get("hostname"));
+			allServerLoad.put(id, temp);
+			sendToOthers(con,message.toJSONString(),serverconnections);
+
+		} catch (Exception e) {
+			e.getMessage();
+		}
+
+		return false;
+	}
+
 	public boolean getreconnectInfo(JSONObject message) {
 
 		reconnectUse = message;
 		return false;
 	}
-
 
 	public static void reconnection(JSONObject reconnectUse) throws IOException {
 		JSONObject temp = new JSONObject();
@@ -738,10 +762,9 @@ public class Control extends Thread {
 
 	public static JSONObject connectionToJson(Connection con) {
 		String ip = con.getSocket().getInetAddress().getHostAddress();
-		int port = con.getSocket().getPort();
 		JSONObject info = new JSONObject();
 		info.put("ip", ip);
-		info.put("port", port);
+		info.put("port", connectionRemotePort.get(con));
 		return info;
 	}
 
@@ -759,12 +782,16 @@ public class Control extends Thread {
 			JSONObject temp = connectionToJson(key);
 //	一定没有父节点,是根
 			if (reconnectInfo.get("info") == temp) {
-				for (JSONObject c : serverlist) {
-					if (!((c.get("hostname").equals(temp.get("ip")))
-							&& (c.get("port").equals(temp.get("port"))))) {
+				Iterator iter = allServerLoad.entrySet().iterator();
+				while (iter.hasNext()) {
+					Map.Entry entry = (Map.Entry) iter.next();
+					Object val = entry.getValue();
+					JSONObject obj = (JSONObject) val;
+					if (!(obj.get("hostname").equals(temp.get("hostname"))) &&
+							obj.get("ip").equals(temp.get("ip"))) {
 						temp.clear();
-						temp.put("ip", c.get("hostname"));
-						temp.put("port", c.get("port"));
+						temp.put("ip", obj.get("hostname"));
+						temp.put("port", obj.get("port"));
 
 						reconnectInfo.clear();
 						reconnectInfo.put("command", "RECONNECT_INFO");
@@ -777,6 +804,22 @@ public class Control extends Thread {
 				}
 
 			}
+		} catch (Exception e) {
+			e.getMessage();
+		}
+	}
+
+	public void sendServerAnnounce(String msg) {
+		try{
+
+			JSONObject announce = new JSONObject();
+			announce.put("command", msg);
+			announce.put("id", Server.getId());
+			announce.put("load", connections.size() - serverconnections.size());
+			announce.put("hostname", Settings.getLocalHostname());
+			announce.put("port", Settings.getLocalPort());
+			String announcement = announce.toJSONString();
+			broadcast(announcement, serverconnections);
 
 		} catch (Exception e) {
 			e.getMessage();

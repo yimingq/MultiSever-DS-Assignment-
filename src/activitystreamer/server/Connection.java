@@ -80,6 +80,7 @@ public class Connection extends Thread {
 			Control.getInstance().connectionClosed(this);
 		}
 		//做为子重连接
+		log.warn("!!!!!!!!!!!!");
 		if (Control.parent == this) {
 			Control.parent =null;
 			try {
