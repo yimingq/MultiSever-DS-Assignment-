@@ -109,7 +109,7 @@ public class Control extends Thread {
 	 */
 	public synchronized boolean process(Connection con, String msg) {
 		try {
-			log.warn("============" + msg);
+//			log.warn("============" + msg);
 			JSONParser parser = new JSONParser();
 			JSONObject message = (JSONObject) parser.parse(msg);
 //-------------------------------Invalid message : No command
@@ -135,7 +135,6 @@ public class Control extends Thread {
 					usersinfo = new JSONObject();
 					usersinfo = message;
 					parent = con;
-//					parentServer =
 					return false;
 				case "ACTIVITY_MESSAGE":
 					return acitivityMessage(message, con);
@@ -164,6 +163,16 @@ public class Control extends Thread {
 					return lockAllowed(msg, message, con);
 				case "RECONNECT_INFO":
 					return getreconnectInfo(message);
+				case "RE_AUTHENTICATE":
+					boolean b=authenticate(message, con);
+					if (!b) {
+						JSONObject m = new JSONObject();
+						m.put("command","RECONNECT_SUCCESS");
+						m.put("ip", con.getSocket().getLocalAddress().getHostAddress());
+						m.put("port", con.getSocket().getLocalPort());
+						sentmessage(m,con);
+					}
+					return b;
 				case "SERVER_UPDATE":
 					return serverUpdate(message,con);
 				case "REMOTE_PORT":
@@ -178,6 +187,26 @@ public class Control extends Thread {
 						e.getMessage();
 					}
 					return false;
+				case "RECONNECT_SUCCESS":
+					JSONObject m = new JSONObject();
+
+					String ip = message.get("ip").toString();
+					int port = Integer.parseInt(message.get("port").toString());
+					m.put("ip", ip);
+					m.put("port", port);
+					reconnectInfo.clear();
+					reconnectInfo.put("command", "RECONNECT_INFO");
+					reconnectInfo.put("info", m);
+					for (Connection c : serverconnections) {
+						if (c != parent) {
+							sentmessage(reconnectInfo,c);
+						}
+					}
+					sentmessage(reconnectInfo,con);
+
+					return false;
+
+
 				default:
 					String ms = "the message contained an unknown command:" + message.get("command");
 					return sendInvalidMessage(con, ms);
@@ -275,6 +304,10 @@ public class Control extends Thread {
 	}
 
 	public boolean doActivity() {
+
+//		log.warn("------------"+reconnectInfo);
+//		log.warn("+++++++++++++++"+reconnectUse);
+
 		if (child != null) {
 			for (Connection key : child.keySet()) {
 				if (child.get(key) == 3) {
@@ -743,7 +776,7 @@ public class Control extends Thread {
 			Connection c = new Connection(s);
 
 			JSONObject outgo = new JSONObject();
-			outgo.put("command", "AUTHENTICATE");
+			outgo.put("command", "RE_AUTHENTICATE");
 			outgo.put("secret", Settings.getSecret());
 
 			sentmessage(outgo, c);
