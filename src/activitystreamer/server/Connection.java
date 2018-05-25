@@ -81,31 +81,15 @@ public class Connection extends Thread {
 		}
 		//做为子重连接
 //		log.warn("!!!!!!!!!!!!");
-		if (Control.parent == this) {
-			Control.parent =null;
-			try {
-				if (Control.getReconnectUse().size() > 1) {
-					Control.reconnection(Control.getReconnectUse());
-				} else {
-					JSONObject obj = new JSONObject();
-					obj.put("command", "RECONNECT_INFO");
-					Control.setReconnectInfo(obj);
-					Control.broadcast(obj.toJSONString(),Control.getServerConnections());
-				}
 
-			}catch (Exception z){
-				log.error("reconnection: "+z.getMessage());
-			}
+		if (Control.parent==this) {
+			Control.parent = null;
+			Control.childReconnection();
 		}
 
-		//作为父
-		for (Connection key : Control.child.keySet()){
-			if (key == this) {
-				Control.child.remove(key);
-				Control.rootChangeReconnectInfo(key);
-			}
+		Control.parentDo(this);
 
-		}
+
 		open=false;
 	}
 	

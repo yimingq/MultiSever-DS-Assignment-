@@ -25,13 +25,15 @@ public class Control extends Thread {
 	private static HashMap<Connection, String> loginMap;
 	private static HashMap<String,JSONObject> allServerLoad;
 	private static HashMap<Connection, Integer> connectionRemotePort;
+//	private static JSONObject lastNode;
+	public static Connection nextRootNode;
 
 	protected static Control control = null;
 
 	private static boolean freeze = false;
 	private static int triggerParent = 0;
 	public static Connection parent;
-	public static HashMap<Connection, Integer> child;
+	private static HashMap<Connection, Integer> child;
 	//---------------
 	private final int REDIRECT_LIMIT = 2;
 	private static ArrayList<JSONObject> serverlist;
@@ -40,17 +42,12 @@ public class Control extends Thread {
 	private static String redirectPort = null;
 	private static JSONObject reconnectInfo;
 	private static JSONObject reconnectUse;
+	private static JSONObject rootReconnect;
 
-	public static void setReconnectInfo(JSONObject obj) {
+	private static void setReconnectInfo(JSONObject obj) {
 		reconnectInfo = obj;
 	}
 
-	public static ArrayList<Connection> getServerConnections() {
-		return serverconnections;
-	}
-	public static JSONObject getReconnectUse() {
-		return reconnectUse;
-	}
 
 	public static Control getInstance() {
 		if (control == null) {
@@ -76,6 +73,7 @@ public class Control extends Thread {
 		allServerLoad = new HashMap<String, JSONObject>();
 		connectionRemotePort = new HashMap<Connection,Integer>();
 		child = new HashMap<Connection, Integer>();
+		rootReconnect = new JSONObject();
 
 		thisServer.put("id", Server.getId());
 		if (thisServer != null) {
@@ -118,8 +116,8 @@ public class Control extends Thread {
 				String ms = "the received message did not contain a command";
 				return sendInvalidMessage(con, ms);
 			}
-			log.debug("received a " + message.get("command") + " from " +
-					con.getSocket().getInetAddress() + "/" + con.getSocket().getPort());
+//			log.debug("received a " + message.get("command") + " from " +
+//					con.getSocket().getInetAddress() + "/" + con.getSocket().getPort());
 			if (message.get("command").equals("INVALID_MESSAGE")) {
 				log.warn(message.get("info"));
 			}
@@ -164,49 +162,25 @@ public class Control extends Thread {
 				case "RECONNECT_INFO":
 					return getreconnectInfo(message);
 				case "RE_AUTHENTICATE":
-					boolean b=authenticate(message, con);
-					if (!b) {
-						JSONObject m = new JSONObject();
-						m.put("command","RECONNECT_SUCCESS");
-						m.put("ip", con.getSocket().getLocalAddress().getHostAddress());
-						m.put("port", con.getSocket().getLocalPort());
-						sentmessage(m,con);
-					}
-					return b;
+					return reAuthenticate(message, con);
 				case "SERVER_UPDATE":
 					return serverUpdate(message,con);
 				case "REMOTE_PORT":
-					JSONObject info = new JSONObject();
-					info.put("port", message.get("port"));
-					info.put("ip",con.getSocket().getInetAddress().getHostAddress());
-					reconnectInfo.put("info", info);
-
-					try {
-						connectionRemotePort.put(con, (Integer) message.get("port"));
-					} catch (Exception e) {
-						e.getMessage();
-					}
-					return false;
+					return romotePort(message, con);
 				case "RECONNECT_SUCCESS":
-					JSONObject m = new JSONObject();
+					return reconnectSuccess(message, con);
+					//以上正确 重连接后传给子节点
 
-					String ip = message.get("ip").toString();
-					int port = Integer.parseInt(message.get("port").toString());
-					m.put("ip", ip);
-					m.put("port", port);
-					reconnectInfo.clear();
-					reconnectInfo.put("command", "RECONNECT_INFO");
-					reconnectInfo.put("info", m);
-					for (Connection c : serverconnections) {
-						if (c != parent) {
-							sentmessage(reconnectInfo,c);
-						}
+				case "DELETE_FATHER":
+					if (reconnectUse.get("father") != null) {
+						reconnectUse.remove("father");
 					}
-					sentmessage(reconnectInfo,con);
-
 					return false;
 
-
+				case "ROOT_RECONNECT":
+					rootReconnect.clear();
+					rootReconnect.put("info",message.get("ROOT_RECONNECT"));
+					return false;
 				default:
 					String ms = "the message contained an unknown command:" + message.get("command");
 					return sendInvalidMessage(con, ms);
@@ -217,229 +191,12 @@ public class Control extends Thread {
 		return false;
 	}
 
-	/*
-	 * The connection has been closed by the other party.
-	 */
-	public static synchronized void connectionClosed(Connection con) {
-		if (!term) {
-			connections.remove(con);
-			if (serverconnections.contains(con)) {
-				serverconnections.remove(con);
-			}
-			if (loginMap.containsKey(con)) {
-				loginMap.remove(con);
-			}
-		}
-
-	}
-
-
-	/*
-	 * A new incoming connection has been established, and a reference is returned to it
-	 */
-	public synchronized Connection incomingConnection(Socket s) throws IOException {
-		log.debug("incomming connection: " + Settings.socketAddress(s));
-		Connection c = new Connection(s);
-		connections.add(c);
-
-
-		return c;
-
-	}
-
-	/*
-	 * A new outgoing connection has been established, and a reference is returned to it
-	 */
-	public synchronized Connection outgoingConnection(Socket s) throws IOException {
-		log.debug("outgoing connection: " + Settings.socketAddress(s));
-		Connection c = new Connection(s);
-
-
-		JSONObject outgo = new JSONObject();
-		outgo.put("command", "AUTHENTICATE");
-		outgo.put("secret", Settings.getSecret());
-		sentmessage(outgo, c);
-
-		connections.add(c);
-		serverconnections.add(c);
-
-		connectionRemotePort.put(c,Settings.getRemotePort());
-		JSONObject p = new JSONObject();
-		p.put("command", "REMOTE_PORT");
-		p.put("port", Settings.getLocalPort());
-
-		sentmessage(p,c);
-		putreconnectInfo(c);
-
-
-		return c;
-
-	}
-
-	@Override
-	public void run() {
-
-
-		log.info("using activity interval of " + Settings.getActivityInterval() + " milliseconds");
-		while (!term) {
-			// do something with 5 second intervals in between
-			try {
-				Thread.sleep(Settings.getActivityInterval());
-			} catch (InterruptedException e) {
-				log.info("received an interrupt, system is shutting down");
-				break;
-			}
-
-			if (!term) {
-				term = doActivity();
-			}
-
-		}
-		log.info("closing " + connections.size() + " connections");
-		// clean up
-		for (Connection connection : connections) {
-			connection.closeCon();
-		}
-		listener.setTerm(true);
-	}
-
-	public boolean doActivity() {
-
-//		log.warn("------------"+reconnectInfo);
-//		log.warn("+++++++++++++++"+reconnectUse);
-
-		if (child != null) {
-			for (Connection key : child.keySet()) {
-				if (child.get(key) == 3) {
-					rootChangeReconnectInfo(key);
-// 作为根节点， 或者reconnectInfo是断掉的server
-
-				} else {
-					int i = child.get(key) + 1;
-					child.put(key, i);
-				}
-			}
-
-		}
-
-		if (parent != null) {
-			triggerParent = judgeConnection(triggerParent, parent);
-			if (triggerParent == 3) {
-				try {
-					if (reconnectUse.size() > 1) {
-						reconnection(reconnectUse);
-					} else {
-						reconnectInfo.clear();
-						reconnectInfo.put("command", "RECONNECT_INFO");
-						broadcast(reconnectInfo.toJSONString(),serverconnections);
-					}
-				} catch (Exception e) {
-					log.error("reconnection: " + e.getMessage());
-				}
-			}
-		}
-//--------------------------------send SERVER_ANNOUNCE between severs
-		sendServerAnnounce("SERVER_ANNOUNCE");
-		return false;
-	}
-
-	public final void setTerm(boolean t) {
-		term = t;
-	}
-
-	public final ArrayList<Connection> getConnections() {
-		return connections;
-	}
-
-	public static void sentmessage(JSONObject json, Connection con) throws IOException {
-		Socket s = con.getSocket();
-		BufferedWriter writer = new BufferedWriter(
-				new OutputStreamWriter(s.getOutputStream(),
-						"UTF-8"));
-		writer.write(json.toJSONString() + "\n");
-		writer.flush();
-	}
-
-
-	public synchronized static void broadcast(String msg, ArrayList<Connection> connections) throws IOException {
-		for (Connection con : connections) {
-			Socket s = con.getSocket();
-			BufferedWriter writer = new BufferedWriter(
-					new OutputStreamWriter(s.getOutputStream(),
-							"UTF-8"));
-			writer.write(msg + "\n");
-			writer.flush();
-		}
-	}
-
-	public int judgeConnection(int trigger, Connection con) {
-		if (trigger == 3) {
-			freeze = true;
-			connections.remove(con);
-			if (serverconnections.contains(con)) {
-				serverconnections.remove(con);
-			}
-			con.closeCon();
-		}
-		return trigger + 1;
-	}
-
-	public void sendToOthers(Connection con, String msg, ArrayList<Connection> connections) throws IOException {
-		int index = connections.indexOf(con);
-		ArrayList<Connection> temp = new ArrayList<Connection>();
-		for (int x = 0; x < connections.size(); x++) {
-			if (x != index) {
-				temp.add(connections.get(x));
-			}
-		}
-		broadcast(msg, temp);
-	}
-
 	public boolean sendInvalidMessage(Connection con, String msg) throws IOException {
 		JSONObject invalid = new JSONObject();
 		invalid.put("command", "INVALID_MESSAGE");
 		invalid.put("info", msg);
 		sentmessage(invalid, con);
 		return true;
-	}
-
-	public boolean authenticate(JSONObject message, Connection con) throws IOException {
-		if (message.get("secret") == null) {
-			String ms = "the received message did not contain a secret";
-			return sendInvalidMessage(con, ms);
-
-		} else if (message.size() != 2) {
-			String ms = "incorrect message";
-			return sendInvalidMessage(con, ms);
-		} else if (message.get("secret").equals(Settings.getSecret())) {
-
-			sentmessage(usersinfo, con);
-			JSONObject p =new JSONObject();
-			if (reconnectInfo != null) {
-
-//一定有父或子
-				if (reconnectInfo.size() > 1) {
-					sentmessage(reconnectInfo, con);
-				} else {
-
-//是根节点，而且没有子
-					putreconnectInfo(con);
-
-				}
-			}
-
-			serverconnections.add(con);
-
-			sendServerAnnounce("SERVER_UPDATE");
-			child.put(con, 0);
-			return false;
-		} else {
-			JSONObject authenticateFail = new JSONObject();
-			authenticateFail.put("command", "AUTHENTICATION_FAIL");
-			authenticateFail.put("info", "the supplied secret is incorrect: " + message.get("secret"));
-			sentmessage(authenticateFail, con);
-			return true;
-		}
 	}
 
 	public boolean acitivityMessage(JSONObject message, Connection con) throws IOException {
@@ -763,13 +520,349 @@ public class Control extends Thread {
 		return false;
 	}
 
+	public boolean authenticate(JSONObject message, Connection con) throws IOException {
+		if (message.get("secret") == null) {
+			String ms = "the received message did not contain a secret";
+			return sendInvalidMessage(con, ms);
+
+		} else if (message.size() != 2) {
+			String ms = "incorrect message";
+			return sendInvalidMessage(con, ms);
+		} else if (message.get("secret").equals(Settings.getSecret())) {
+
+			sentmessage(usersinfo, con);
+//-------------------------------------------------
+//如果有父就传fatherInfo到reconnectInfo
+			if (parent != null) {
+				JSONObject p =new JSONObject();
+				p.put("ip", parent.getSocket().getInetAddress().getHostAddress());
+				p.put("port", connectionRemotePort.get(parent));
+				reconnectInfo.put("father", p);
+				if (nextRootNode !=null&&nextRootNode!= con) {
+					JSONObject renew = new JSONObject();
+					renew.put("ROOT_RECONNECT", p);
+					sentmessage(renew,nextRootNode);
+				}
+			}
+
+
+//-----------------------------------------
+			if ((parent != null && serverconnections.size() == 1) ||
+					(parent == null && serverconnections.size() == 0)) {
+				nextRootNode = con;
+			}
+
+
+			serverconnections.add(con);
+
+			sendServerAnnounce("SERVER_UPDATE");
+			child.put(con, 0);
+//---------------------------------
+			if (reconnectInfo != null) {
+//一定有父或子
+				if (reconnectInfo.size() > 1) {
+					sentmessage(reconnectInfo, con);
+				} else {
+//是根节点，而且没有子
+					putreconnectInfo(con);
+				}
+			}
+//--------------------------------------------------------
+			return false;
+		} else {
+			JSONObject authenticateFail = new JSONObject();
+			authenticateFail.put("command", "AUTHENTICATION_FAIL");
+			authenticateFail.put("info", "the supplied secret is incorrect: " + message.get("secret"));
+			sentmessage(authenticateFail, con);
+			return true;
+		}
+	}
+
+	public boolean reAuthenticate(JSONObject message, Connection con) throws IOException {
+		boolean b2=authenticate(message, con);
+		if (!b2) {
+			try {
+				if (parent == null) {
+//这里要添加Info信息	，已经拿到port了
+					putreconnectInfo(con);
+//如果这时候是根断了，重新连接到第二个根，发送空消息
+					putreconnectInfo(con);
+					JSONObject temp = new JSONObject();
+					temp.put("command", "RECONNECT_INFO");
+					sentmessage(temp, con);
+				}
+//一定有父或子
+				else {
+					sentmessage(reconnectInfo, con);
+				}
+			} catch (NullPointerException e) {
+				e.getMessage();
+			}
+
+			JSONObject m = new JSONObject();
+			m.put("command","RECONNECT_SUCCESS");
+			m.put("ip", con.getSocket().getLocalAddress().getHostAddress());
+			m.put("port", con.getSocket().getLocalPort());
+			sentmessage(m,con);
+		}
+		return b2;
+	}
+
+	public boolean reconnectSuccess(JSONObject message, Connection con) throws IOException {
+		JSONObject m = new JSONObject();
+
+		String ip = message.get("ip").toString();
+		int port = Integer.parseInt(message.get("port").toString());
+		m.put("ip", ip);
+		m.put("port", port);
+		reconnectInfo.clear();
+		reconnectInfo.put("command", "RECONNECT_INFO");
+		reconnectInfo.put("info", m);
+		for (Connection c : serverconnections) {
+			if (c != parent) {
+				sentmessage(reconnectInfo,c);
+			}
+		}
+		log.info("***** Reconnection success to : "+ip+":  "+port);
+		return false;
+	}
+
+	public boolean romotePort(JSONObject message, Connection con)throws IOException {
+		JSONObject info = new JSONObject();
+		info.put("port", message.get("port"));
+		info.put("ip",con.getSocket().getInetAddress().getHostAddress());
+		reconnectInfo.put("info", info);
+
+		try {
+			connectionRemotePort.put(con,Integer.parseInt(message.get("port").toString()));
+		} catch (Exception e) {
+			e.getMessage();
+		}
+		log.info("Get Connected with: "+con.getSocket().getInetAddress().getHostAddress()+
+				"/ "+connectionRemotePort.get(con));
+		return false;
+	}
+
+
+
+	/*
+	 * The connection has been closed by the other party.
+	 */
+	public static synchronized void connectionClosed(Connection con) {
+		if (!term) {
+			connections.remove(con);
+			if (serverconnections.contains(con)) {
+				serverconnections.remove(con);
+			}
+			if (loginMap.containsKey(con)) {
+				loginMap.remove(con);
+			}
+		}
+	}
+
+	/*
+	 * A new incoming connection has been established, and a reference is returned to it
+	 */
+	public synchronized Connection incomingConnection(Socket s) throws IOException {
+		log.debug("incomming connection: " + Settings.socketAddress(s));
+		Connection c = new Connection(s);
+		connections.add(c);
+
+
+		return c;
+
+	}
+
+	/*
+	 * A new outgoing connection has been established, and a reference is returned to it
+	 */
+	public synchronized Connection outgoingConnection(Socket s) throws IOException {
+		log.debug("outgoing connection: " + Settings.socketAddress(s));
+		Connection c = new Connection(s);
+
+
+		JSONObject outgo = new JSONObject();
+		outgo.put("command", "AUTHENTICATE");
+		outgo.put("secret", Settings.getSecret());
+		sentmessage(outgo, c);
+
+		connections.add(c);
+		serverconnections.add(c);
+
+		connectionRemotePort.put(c,Settings.getRemotePort());
+		JSONObject p = new JSONObject();
+		p.put("command", "REMOTE_PORT");
+		p.put("port", Settings.getLocalPort());
+
+		sentmessage(p,c);
+		putreconnectInfo(c);
+
+
+		return c;
+
+	}
+
+	@Override
+	public void run() {
+
+
+		log.info("using activity interval of " + Settings.getActivityInterval() + " milliseconds");
+		while (!term) {
+			// do something with 5 second intervals in between
+			try {
+				Thread.sleep(Settings.getActivityInterval());
+			} catch (InterruptedException e) {
+				log.info("received an interrupt, system is shutting down");
+				break;
+			}
+
+			if (!term) {
+				term = doActivity();
+			}
+
+		}
+		log.info("closing " + connections.size() + " connections");
+		// clean up
+		for (Connection connection : connections) {
+			connection.closeCon();
+		}
+		listener.setTerm(true);
+	}
+
+	public boolean doActivity() {
+
+//		log.warn("------------"+reconnectInfo);
+//		log.warn("+++++++++++++++"+reconnectUse);
+//		log.warn("**************************"+serverconnections.size());
+
+		if (child != null) {
+			for (Connection key : child.keySet()) {
+				if (child.get(key) == 4) {
+					connectionClosed(key);
+					key.closeCon();
+					try {
+						child.remove(key);
+						JSONObject temp = new JSONObject();
+						temp = (JSONObject) reconnectInfo.get("info");
+						String ip = temp.get("ip").toString();
+						int port = Integer.parseInt(temp.get("port").toString());
+
+//这个点是根，而且这个连接是最新的连接也就是reconnectinfo的信息。需要删除
+						if (key.getSocket().getInetAddress().getHostAddress() == ip
+								&& connectionRemotePort.get(key) == port) {
+							if (key != nextRootNode) {
+								temp.clear();
+								temp.put("ip", nextRootNode.getSocket().getInetAddress().getHostAddress());
+								temp.put("port", connectionRemotePort.get(nextRootNode));
+								reconnectInfo.put("info", temp);
+							} else {
+								reconnectInfo.remove("info");
+							}
+						}
+
+					} catch (Exception e) {
+						e.getMessage();
+					}
+
+//					rootChangeReconnectInfo(key);
+
+// 作为根节点， 或者reconnectInfo是断掉的server
+				} else {
+					int i = child.get(key) + 1;
+					child.put(key, i);
+				}
+			}
+
+		}
+
+		if (parent != null) {
+			triggerParent = judgeConnection(triggerParent, parent);
+			if (triggerParent == 4) {
+				parent.closeCon();
+				connectionClosed(parent);
+				try {
+					if (reconnectUse == null || reconnectUse.size() == 1) {
+						reconnection(rootReconnect);
+					} else {
+						reconnection(rootReconnect);
+						}
+					}catch (Exception e) {
+						e.getMessage();
+					}
+				}
+
+
+		}
+//--------------------------------send SERVER_ANNOUNCE between severs
+		sendServerAnnounce("SERVER_ANNOUNCE");
+		return false;
+	}
+
+	public final void setTerm(boolean t) {
+		term = t;
+	}
+
+	public static void sentmessage(JSONObject json, Connection con) throws IOException {
+		Socket s = con.getSocket();
+		BufferedWriter writer = new BufferedWriter(
+				new OutputStreamWriter(s.getOutputStream(),
+						"UTF-8"));
+		writer.write(json.toJSONString() + "\n");
+		writer.flush();
+	}
+
+	public synchronized static void broadcast(String msg, ArrayList<Connection> connections) throws IOException {
+		for (Connection con : connections) {
+			Socket s = con.getSocket();
+			BufferedWriter writer = new BufferedWriter(
+					new OutputStreamWriter(s.getOutputStream(),
+							"UTF-8"));
+			writer.write(msg + "\n");
+			writer.flush();
+		}
+	}
+
+	public int judgeConnection(int trigger, Connection con) {
+		if (trigger == 3) {
+			freeze = true;
+			connections.remove(con);
+			if (serverconnections.contains(con)) {
+				serverconnections.remove(con);
+			}
+			con.closeCon();
+		}
+		return trigger + 1;
+	}
+
+	public static void sendToOthers(Connection con, String msg, ArrayList<Connection> connections) throws IOException {
+		int index = connections.indexOf(con);
+		ArrayList<Connection> temp = new ArrayList<Connection>();
+		for (int x = 0; x < connections.size(); x++) {
+			if (x != index) {
+				temp.add(connections.get(x));
+			}
+		}
+		broadcast(msg, temp);
+	}
+
+
 	public static void reconnection(JSONObject reconnectUse) throws IOException {
 		JSONObject temp = new JSONObject();
 		try {
-			temp = (JSONObject) reconnectUse.get("info");
-			int port = Integer.parseInt(temp.get("port").toString());
-			String ip = temp.get("ip").toString();
-			Socket s = new Socket(ip, port);
+			Socket s;
+
+//两种情况，有父节点和根节点
+			if (reconnectUse.get("father") != null) {
+				temp = (JSONObject) reconnectUse.get("info");
+				int port = Integer.parseInt(temp.get("port").toString());
+				String ip = temp.get("ip").toString();
+				s = new Socket(ip, port);
+			} else {
+				temp = (JSONObject) reconnectUse.get("info");
+				int port = Integer.parseInt(temp.get("port").toString());
+				String ip = temp.get("ip").toString();
+				s = new Socket(ip, port);
+			}
 
 
 			log.debug("Reconnection begin！！");
@@ -780,6 +873,11 @@ public class Control extends Thread {
 			outgo.put("secret", Settings.getSecret());
 
 			sentmessage(outgo, c);
+
+			JSONObject p = new JSONObject();
+			p.put("command", "REMOTE_PORT");
+			p.put("port", Settings.getLocalPort());
+			sentmessage(p,c);
 
 			connections.add(c);
 			serverconnections.add(c);
@@ -793,7 +891,7 @@ public class Control extends Thread {
 
 	}
 
-	public static JSONObject connectionToJson(Connection con) {
+	public JSONObject connectionToJson(Connection con) {
 		String ip = con.getSocket().getInetAddress().getHostAddress();
 		JSONObject info = new JSONObject();
 		info.put("ip", ip);
@@ -810,37 +908,6 @@ public class Control extends Thread {
 
 	}
 
-	public static void rootChangeReconnectInfo(Connection key) {
-		try {
-			JSONObject temp = connectionToJson(key);
-//	一定没有父节点,是根
-			if (reconnectInfo.get("info") == temp) {
-				Iterator iter = allServerLoad.entrySet().iterator();
-				while (iter.hasNext()) {
-					Map.Entry entry = (Map.Entry) iter.next();
-					Object val = entry.getValue();
-					JSONObject obj = (JSONObject) val;
-					if (!(obj.get("hostname").equals(temp.get("hostname"))) &&
-							obj.get("ip").equals(temp.get("ip"))) {
-						temp.clear();
-						temp.put("ip", obj.get("hostname"));
-						temp.put("port", obj.get("port"));
-
-						reconnectInfo.clear();
-						reconnectInfo.put("command", "RECONNECT_INFO");
-						reconnectInfo.put("info", temp);
-						key.closeCon();
-						connectionClosed(key);
-						broadcast(reconnectInfo.toJSONString(), serverconnections);
-						break;
-					}
-				}
-
-			}
-		} catch (Exception e) {
-			e.getMessage();
-		}
-	}
 
 	public void sendServerAnnounce(String msg) {
 		try{
@@ -856,6 +923,40 @@ public class Control extends Thread {
 
 		} catch (Exception e) {
 			e.getMessage();
+		}
+	}
+
+	public static void childReconnection() {
+
+		try {
+			if (reconnectUse!=null&&reconnectUse.size() > 1) {
+				reconnection(reconnectUse);
+			} else {
+// 说明是根
+				JSONObject obj = new JSONObject();
+				obj.put("command", "RECONNECT_INFO");
+				setReconnectInfo(obj);
+				sentmessage(obj,nextRootNode);
+				JSONObject temp = new JSONObject();
+//除了nextRootNode 删除父父节点，用同级重连接
+				temp.put("command","DELETE_FATHER");
+				sendToOthers(nextRootNode,temp.toJSONString(),serverconnections);
+			}
+
+		}catch (Exception z){
+			log.error("reconnection: "+z.getMessage());
+		}
+	}
+	public static void parentDo(Connection con) {
+		//作为父
+//		else if (this == Control.nextRootNode) {
+//
+//		}
+		for (Connection key : child.keySet()){
+			if (con==key) {
+				child.remove(key);
+			}
+
 		}
 	}
 }
