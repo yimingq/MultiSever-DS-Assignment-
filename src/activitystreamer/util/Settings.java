@@ -17,7 +17,7 @@ public class Settings {
 	private static int activityInterval = 5000; // milliseconds
 	private static String secret = null;
 	private static String username = "anonymous";
-	
+	private static String localIP;
 	
 	public static int getLocalPort() {
 		return localPort;
@@ -30,7 +30,15 @@ public class Settings {
 			Settings.localPort = localPort;
 		}
 	}
-	
+
+	public static String setIP(String s) {
+		localIP = s;
+		return s;
+	}
+	public static String getIP() {
+		return localIP;
+	}
+
 	public static int getRemotePort() {
 		return remotePort;
 	}

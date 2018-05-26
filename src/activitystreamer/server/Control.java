@@ -22,11 +22,13 @@ public class Control extends Thread {
 	private static JSONObject usersinfo;
 	private static HashMap<String, Connection> connectionMap;
 	private static HashMap<String, Integer> countMap;
+
 	private static HashMap<Connection, String> loginMap;
 	private static HashMap<String, Long> registerTime;
 	private static HashMap<String, JSONObject> allServerLoad;
 	private static HashMap<Connection, Integer> connectionRemotePort;
-	//	private static JSONObject lastNode;
+
+
 	public static Connection nextRootNode;
 
 	protected static Control control = null;
@@ -36,11 +38,7 @@ public class Control extends Thread {
 	public static Connection parent;
 	private static HashMap<Connection, Integer> child;
 	//---------------
-	private final int REDIRECT_LIMIT = 2;
-	private static ArrayList<JSONObject> serverlist;
-	private static boolean redirect = false;
-	private static String redirectHost = null;
-	private static String redirectPort = null;
+	private static HashMap<String, JSONObject> SERVERLIST;
 	private static JSONObject reconnectInfo;
 	private static JSONObject reconnectUse;
 	private static JSONObject rootReconnect;
@@ -69,7 +67,8 @@ public class Control extends Thread {
 		reconnectInfo = new JSONObject();
 		reconnectInfo.put("command", "RECONNECT_INFO");
 		loginMap = new HashMap<Connection, String>();
-		serverlist = new ArrayList<JSONObject>();
+
+		SERVERLIST = new HashMap<String, JSONObject>();
 		JSONObject thisServer = new JSONObject();
 		allServerLoad = new HashMap<String, JSONObject>();
 		connectionRemotePort = new HashMap<Connection, Integer>();
@@ -77,10 +76,7 @@ public class Control extends Thread {
 		rootReconnect = new JSONObject();
 		registerTime = new HashMap<String, Long>();
 
-		thisServer.put("id", Server.getId());
-		if (thisServer != null) {
-			serverlist.add(thisServer);
-		}
+
 		// start a listener
 		try {
 			listener = new Listener();
@@ -151,8 +147,11 @@ public class Control extends Thread {
 					}
 					return serverAnnounce(message, con);
 				case "LOGIN":
+
 					return login(message, con);
 				case "LOGOUT":
+//-----------------load change
+					sendServerUpdate("SERVER_UPDATE", con);
 					loginMap.remove(con);
 					return true;
 				case "REGISTER":
@@ -168,7 +167,7 @@ public class Control extends Thread {
 				case "RE_AUTHENTICATE":
 					return reAuthenticate(message, con);
 				case "SERVER_UPDATE":
-					return serverUpdate(message, con);
+					return updateToOther(message, con);
 				case "REMOTE_PORT":
 					return romotePort(message, con);
 				case "RECONNECT_SUCCESS":
@@ -184,6 +183,13 @@ public class Control extends Thread {
 				case "ROOT_RECONNECT":
 					rootReconnect.clear();
 					rootReconnect.put("info", message.get("ROOT_RECONNECT"));
+					return false;
+
+				case "LOAD_REQUEST":
+					return broadcastLoadRequest(message, con);
+
+				case "TARGET_SEND_LOAD":
+					sentLoadOrNot(message, con);
 					return false;
 				default:
 					String ms = "the message contained an unknown command:" + message.get("command");
@@ -272,34 +278,9 @@ public class Control extends Thread {
 		log.debug("received announcement from " + message.get("id") + " load " +
 				message.get("load") + " at " +
 				message.get("hostname") + ":" + message.get("port"));
-		if (serverlist != null) {
-			boolean flag = true;
-			for (JSONObject server : serverlist) {
-				if (server.get("id").equals(message.get("id"))) {
-					server.put("load", message.get("load"));
-					flag = false;
-					break;
 
-				}
-			}
-			if (flag) {
-				JSONObject newServer = new JSONObject();
-				newServer.put("id", message.get("id"));
-				newServer.put("load", message.get("load"));
-				newServer.put("hostname", message.get("hostname"));
-				newServer.put("port", message.get("port"));
-				if (newServer != null) {
-					serverlist.add(newServer);
-				}
-			}
-			if (!redirect) {
-				if (connections.size() - serverconnections.size() - Integer.parseInt(message.get("load").toString()) > REDIRECT_LIMIT) {
-					redirect = true;
-					redirectHost = message.get("hostname").toString();
-					redirectPort = message.get("port").toString();
-				}
-			}
-		}
+
+		redirection(message);
 
 		String announce = message.toJSONString();
 		sendToOthers(con, announce, serverconnections);
@@ -323,26 +304,50 @@ public class Control extends Thread {
 		} else {
 			if ((message.get("username").equals("anonymous")) ||
 					(usersinfo.get(message.get("username")).equals(message.get("secret")))) {
-				//LOGIN SUCCESS, NO REDIRECT
-				if (!redirect) {
-					JSONObject loginSuccess = new JSONObject();
-					loginSuccess.put("command", "LOGIN_SUCCESS");
-					loginSuccess.put("info", "logged in as user: " + username);
-					sentmessage(loginSuccess, con);
-					loginMap.put(con, message.get("username").toString());
-					return false;
-				} else {
-					//REDIRECT
+				//LOGIN SUCCESS,REDIRECT
+
+				try {
+					String IP;
+					int PORT ;
+					int load = Integer.parseInt(
+							allServerLoad.get(Server.getId()).get("load").toString());
 					JSONObject redirectCommand = new JSONObject();
-					redirectCommand.put("command", "REDIRECT");
-					redirectCommand.put("hostname", redirectHost);
-					redirectCommand.put("port", redirectPort);
-					sentmessage(redirectCommand, con);
-					redirect = false;
-					log.info(message.get("username") + " has been redirected to: "
-							+ redirectHost + ":" + redirectPort);
-					return true;
+					for (JSONObject value : allServerLoad.values()) {
+						if (Integer.parseInt(value.get("load").toString()) < (load - 1)) {
+							IP = value.get("hostname").toString();
+							PORT = Integer.parseInt(value.get("port").toString());
+							redirectCommand.clear();
+							redirectCommand.put("command", "REDIRECT");
+							redirectCommand.put("hostname", IP);
+							redirectCommand.put("port", PORT);
+							sentmessage(redirectCommand, con);
+//							redirect = false;
+							log.info(message.get("username") + " has been redirected to: "
+									+ IP + ":" + PORT);
+
+							return true;
+						}
+					}
+
+				} catch (NullPointerException e) {
+					e.getMessage();
 				}
+				//=-------no direct
+				JSONObject loginSuccess = new JSONObject();
+				loginSuccess.put("command", "LOGIN_SUCCESS");
+				loginSuccess.put("info", "logged in as user: " + username);
+				sentmessage(loginSuccess, con);
+				loginMap.put(con, message.get("username").toString());
+
+//----------------------load change
+				renewMyLoad();
+				sendServerUpdate("SERVER_UPDATE", con);
+
+
+//-------------------
+				return false;
+
+
 			} else {
 				//LOGIN FAILED
 				JSONObject loginFailed = new JSONObject();
@@ -492,7 +497,7 @@ public class Control extends Thread {
 			return false;
 		} else {
 			int i = countMap.get(message.get("username")) + 1;
-			if (i == serverlist.size() - 1) {
+			if (i == allServerLoad.size()) {
 				JSONObject registerSuccess = new JSONObject();
 				registerSuccess.put("command", "REGISTER_SUCCESS");
 				registerSuccess.put("info", "register success for " + message.get("username"));
@@ -509,13 +514,14 @@ public class Control extends Thread {
 		}
 	}
 
-	public boolean serverUpdate(JSONObject message, Connection con) {
+	public boolean updateToOther(JSONObject message, Connection con) {
 		String id = message.get("id").toString();
 		try {
 			JSONObject temp = new JSONObject();
 			temp.put("load", message.get("load"));
 			temp.put("port", message.get("port"));
-			temp.put("hostname", message.get("hostname"));
+			temp.put("ip", message.get("ip"));
+//-----------自己存一份然后传给别人
 			allServerLoad.put(id, temp);
 			sendToOthers(con, message.toJSONString(), serverconnections);
 
@@ -524,6 +530,74 @@ public class Control extends Thread {
 		}
 
 		return false;
+	}
+
+	public boolean broadcastLoadRequest(JSONObject message, Connection con) throws IOException {
+		message.put("command", "TARGET_SEND_LOAD");
+		int num = allServerLoad.size()+1;
+
+
+		int loadSum = 0;
+		for (JSONObject load : allServerLoad.values()) {
+			loadSum = loadSum + Integer.parseInt(load.get("load").toString());
+		}
+		try {
+			int avg = loadSum / num;
+//			log.warn("@@@@@@@@@@"+avg);
+			for (Map.Entry<String, JSONObject> entry : allServerLoad.entrySet()) {
+				int gap = Integer.parseInt(entry.getValue().get("load").toString()) - avg-1;
+				if (gap > 0) {
+					message.put(entry.getKey(), gap);
+
+				}
+			}
+
+		} catch (NullPointerException e) {
+			e.getMessage();
+		}
+//		log.warn("@@@@@@@@@@@@@@@@"+message);
+		sentLoadOrNot(message, con);
+
+		return false;
+	}
+
+	public void sentLoadOrNot(JSONObject message, Connection con) throws IOException {
+		if (message.get(Server.getId()) != null) {
+//			log.warn("!!!!!!!!!!!!!!!!"+message);
+			int send = Integer.parseInt(message.get(Server.getId()).toString());
+			int out = send;
+			for (Connection key : loginMap.keySet()) {
+				JSONObject redirect = new JSONObject();
+				redirect.put("command", "REDIRECT");
+				redirect.put("hostname", message.get("ip"));
+				redirect.put("port", message.get("port"));
+				log.warn("a user redirected to: " + message.get("ip") + "/" + message.get("port"));
+				sentmessage(redirect, key);
+				connectionClosed(key);
+
+				send = send - 1;
+				if (send == 0) {
+					break;
+				}
+			}
+			JSONObject announce2 = new JSONObject();
+			announce2.put("command", "SERVER_UPDATE");
+			announce2.put("id", Server.getId());
+			announce2.put("load", connections.size() - serverconnections.size()-out);
+			announce2.put("port", Settings.getLocalPort());
+			announce2.put("ip", Settings.getIP());
+			JSONObject temp = new JSONObject();
+			temp.put("load", connections.size() - serverconnections.size()- out);
+
+
+			temp.put("port", Settings.getLocalPort());
+			temp.put("ip", Settings.getIP());
+			String announcement = announce2.toJSONString();
+			allServerLoad.put(Server.getId(),temp);
+			broadcast(announcement, serverconnections);
+		}
+
+		sendToOthers(con, message.toJSONString(), serverconnections);
 	}
 
 	public boolean getreconnectInfo(JSONObject message) {
@@ -567,7 +641,6 @@ public class Control extends Thread {
 
 			serverconnections.add(con);
 
-			sendServerAnnounce("SERVER_UPDATE");
 			child.put(con, 0);
 //---------------------------------
 			if (reconnectInfo != null) {
@@ -679,6 +752,17 @@ public class Control extends Thread {
 		Connection c = new Connection(s);
 		connections.add(c);
 
+		//----------存自己的信息
+		if (connections.size() == 1) {
+			Settings.setIP(s.getLocalAddress().getHostAddress());
+			JSONObject announce3 = new JSONObject();
+			announce3.put("load", 0);
+			announce3.put("port", Settings.getLocalPort());
+			announce3.put("ip", s.getLocalAddress().getHostAddress());
+			String id = Server.getId();
+			allServerLoad.put(id, announce3);
+		}
+//----------------------
 
 		return c;
 
@@ -690,7 +774,7 @@ public class Control extends Thread {
 	public synchronized Connection outgoingConnection(Socket s) throws IOException {
 		log.debug("outgoing connection: " + Settings.socketAddress(s));
 		Connection c = new Connection(s);
-
+		Settings.setIP(s.getLocalAddress().getHostAddress());
 
 		JSONObject outgo = new JSONObject();
 		outgo.put("command", "AUTHENTICATE");
@@ -705,6 +789,21 @@ public class Control extends Thread {
 		p.put("command", "REMOTE_PORT");
 		p.put("port", Settings.getLocalPort());
 
+//----------存自己的信息
+		JSONObject announce3 = new JSONObject();
+		announce3.put("load", 0);
+		announce3.put("port", Settings.getLocalPort());
+		announce3.put("ip", s.getLocalAddress().getHostAddress());
+		String id = Server.getId();
+		allServerLoad.put(id, announce3);
+//----------------------请求load 进来
+		JSONObject loadRequest = new JSONObject();
+		loadRequest.put("command", "LOAD_REQUEST");
+		loadRequest.put("ip", c.getSocket().getLocalAddress().getHostAddress());
+		loadRequest.put("port", Settings.getLocalPort());
+		sentmessage(loadRequest, c);
+
+//------------------
 		sentmessage(p, c);
 		putreconnectInfo(c);
 
@@ -741,14 +840,14 @@ public class Control extends Thread {
 	}
 
 	public boolean doActivity() {
+//		log.warn(allServerLoad + "##############");
+//		log.warn("------------" + reconnectInfo);
+//		log.warn("+++++++++++++++" + reconnectUse);
 
-//		log.warn("------------"+reconnectInfo);
-//		log.warn("+++++++++++++++"+reconnectUse);
-//		log.warn("**************************"+serverconnections.size());
 
 		if (child != null) {
 			Iterator<Map.Entry<Connection, Integer>> it = child.entrySet().iterator();
-			while(it.hasNext()){
+			while (it.hasNext()) {
 				Map.Entry<Connection, Integer> entry = it.next();
 				Connection key = entry.getKey();
 				Integer value = entry.getValue();
@@ -924,6 +1023,16 @@ public class Control extends Thread {
 
 	}
 
+	public void sendServerUpdate(String msg, Connection con) throws IOException {
+		JSONObject announce2 = new JSONObject();
+		announce2.put("command", msg);
+		announce2.put("id", Server.getId());
+		announce2.put("load", connections.size() - serverconnections.size());
+		announce2.put("port", Settings.getLocalPort());
+		announce2.put("ip", con.getSocket().getLocalAddress().getHostAddress());
+		String announcement = announce2.toJSONString();
+		broadcast(announcement, serverconnections);
+	}
 
 	public void sendServerAnnounce(String msg) {
 		try {
@@ -970,7 +1079,7 @@ public class Control extends Thread {
 //
 //		}
 		Iterator<Map.Entry<Connection, Integer>> it = child.entrySet().iterator();
-		while(it.hasNext()){
+		while (it.hasNext()) {
 			Map.Entry<Connection, Integer> entry = it.next();
 			Connection key = entry.getKey();
 			if (con == key) {
@@ -979,21 +1088,21 @@ public class Control extends Thread {
 		}
 	}
 
-	public static void registerTimeout()throws IOException {
+	public static void registerTimeout() throws IOException {
 		if (registerTime.size() != 0) {
 			long now = System.currentTimeMillis();
 			Iterator<Map.Entry<String, Long>> it = registerTime.entrySet().iterator();
-			while(it.hasNext()){
+			while (it.hasNext()) {
 				Map.Entry<String, Long> entry = it.next();
 				String key = entry.getKey();
 				Long t = entry.getValue();
 				long gap = now - t;
-				if (t<6000) {
+				if (gap < 6000) {
 					//----------------------Lock_deny
 					JSONObject lock_denied = new JSONObject();
 					lock_denied.put("command", "LOCK_DENIED");
 					lock_denied.put("username", key);
-					lock_denied.put("secret","default");
+					lock_denied.put("secret", "default");
 					String lockdeny = lock_denied.toJSONString();
 					broadcast(lockdeny, serverconnections);
 					usersinfo.remove(key);
@@ -1010,4 +1119,47 @@ public class Control extends Thread {
 			}
 		}
 	}
+
+	//-------------从server announce中提取出的redirect
+	public void redirection(JSONObject message) {
+
+		boolean flag = true;
+
+		Iterator<Map.Entry<String, JSONObject>> it = allServerLoad.entrySet().iterator();
+		while(it.hasNext()){
+			Map.Entry<String, JSONObject> entry = it.next();
+			String key = entry.getKey();
+			JSONObject i = entry.getValue();
+
+			if (key.equals(message.get("id"))) {
+				i.put("load", message.get("load"));
+				flag = false;
+				break;
+			}
+		}
+		try {
+			if (flag) {
+				JSONObject newServer = new JSONObject();
+				newServer.put("load", message.get("load"));
+				newServer.put("hostname", message.get("hostname"));
+				newServer.put("port", message.get("port"));
+				allServerLoad.put(message.get("id").toString(), newServer);
+			}
+
+		} catch (Exception e) {
+			e.getMessage();
+		}
+
+
+
+	}
+
+	public void renewMyLoad() {
+		JSONObject announce3 = new JSONObject();
+		announce3.put("load", connections.size() - serverconnections.size());
+		announce3.put("ip",Settings.getIP());
+		announce3.put("port", Settings.getLocalPort());
+		allServerLoad.put(Server.getId(), announce3);
+	}
+
 }
