@@ -120,7 +120,7 @@ public class Control extends Thread {
 				log.warn(message.get("info"));
 			}
 //-------------判断register超时
-			registerTimeout();
+
 //--------------------------
 			switch (message.get("command").toString()) {
 				case "AUTHENTICATION_FAIL":
@@ -497,11 +497,13 @@ public class Control extends Thread {
 			return false;
 		} else {
 			int i = countMap.get(message.get("username")) + 1;
-			if (i == allServerLoad.size()) {
+			if (i == allServerLoad.size()-1) {
 				JSONObject registerSuccess = new JSONObject();
 				registerSuccess.put("command", "REGISTER_SUCCESS");
 				registerSuccess.put("info", "register success for " + message.get("username"));
 				sentmessage(registerSuccess, connectionMap.get(message.get("username")));
+
+				registerTime.remove(message.get("username").toString());
 				connectionMap.remove(message.get("username"));
 				countMap.remove(message.get("username"));
 				log.info("REGISTER_SUCCESS for: " + message.get("username"));
@@ -840,11 +842,16 @@ public class Control extends Thread {
 	}
 
 	public boolean doActivity() {
-//		log.warn(allServerLoad + "##############");
-//		log.warn("------------" + reconnectInfo);
-//		log.warn("+++++++++++++++" + reconnectUse);
 
+		try {
+		if (registerTime.size() != 0) {
 
+			registerTimeout();
+		}
+
+		} catch (IOException e) {
+			e.getMessage();
+		}
 		if (child != null) {
 			Iterator<Map.Entry<Connection, Integer>> it = child.entrySet().iterator();
 			while (it.hasNext()) {
@@ -1091,32 +1098,39 @@ public class Control extends Thread {
 	public static void registerTimeout() throws IOException {
 		if (registerTime.size() != 0) {
 			long now = System.currentTimeMillis();
-			Iterator<Map.Entry<String, Long>> it = registerTime.entrySet().iterator();
-			while (it.hasNext()) {
-				Map.Entry<String, Long> entry = it.next();
-				String key = entry.getKey();
-				Long t = entry.getValue();
-				long gap = now - t;
-				if (gap < 6000) {
-					//----------------------Lock_deny
-					JSONObject lock_denied = new JSONObject();
-					lock_denied.put("command", "LOCK_DENIED");
-					lock_denied.put("username", key);
-					lock_denied.put("secret", "default");
-					String lockdeny = lock_denied.toJSONString();
-					broadcast(lockdeny, serverconnections);
-					usersinfo.remove(key);
+			try {
+				Iterator<Map.Entry<String, Long>> it = registerTime.entrySet().iterator();
+				while (it.hasNext()) {
+					Map.Entry<String, Long> entry = it.next();
+					String key = entry.getKey();
+					Long t = entry.getValue();
+					long gap = now - t;
+					log.warn(gap+"@@@@@@@@@@@@@"+now+"!!!"+t);
+					if (gap > 6000) {
+						//----------------------Lock_deny
+						JSONObject lock_denied = new JSONObject();
+						lock_denied.put("command", "LOCK_DENIED");
+						lock_denied.put("username", key);
+						lock_denied.put("secret", "default");
+						String lockdeny = lock_denied.toJSONString();
+						broadcast(lockdeny, serverconnections);
+						usersinfo.remove(key);
 //-------------------------regster_failed
-					JSONObject registerFail = new JSONObject();
-					registerFail.put("command", "REGISTER_FAILED");
-					registerFail.put("info", "Register time out, please try later!!");
-					sentmessage(registerFail, connectionMap.get(key));
+						JSONObject registerFail = new JSONObject();
+						registerFail.put("command", "REGISTER_FAILED");
+						registerFail.put("info", "Register time out, please try later!!");
+						sentmessage(registerFail, connectionMap.get(key));
 //===========clear map
-					connectionMap.remove(key);
-					registerTime.remove(key);
-					it.remove();
+						connectionMap.remove(key);
+						registerTime.remove(key);
+						it.remove();
+					}
 				}
+
+			} catch (Exception e) {
+				e.getMessage();
 			}
+
 		}
 	}
 
