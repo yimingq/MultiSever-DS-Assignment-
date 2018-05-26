@@ -23,9 +23,10 @@ public class Control extends Thread {
 	private static HashMap<String, Connection> connectionMap;
 	private static HashMap<String, Integer> countMap;
 	private static HashMap<Connection, String> loginMap;
-	private static HashMap<String,JSONObject> allServerLoad;
+	private static HashMap<String, Long> registerTime;
+	private static HashMap<String, JSONObject> allServerLoad;
 	private static HashMap<Connection, Integer> connectionRemotePort;
-//	private static JSONObject lastNode;
+	//	private static JSONObject lastNode;
 	public static Connection nextRootNode;
 
 	protected static Control control = null;
@@ -71,9 +72,10 @@ public class Control extends Thread {
 		serverlist = new ArrayList<JSONObject>();
 		JSONObject thisServer = new JSONObject();
 		allServerLoad = new HashMap<String, JSONObject>();
-		connectionRemotePort = new HashMap<Connection,Integer>();
+		connectionRemotePort = new HashMap<Connection, Integer>();
 		child = new HashMap<Connection, Integer>();
 		rootReconnect = new JSONObject();
+		registerTime = new HashMap<String, Long>();
 
 		thisServer.put("id", Server.getId());
 		if (thisServer != null) {
@@ -121,7 +123,9 @@ public class Control extends Thread {
 			if (message.get("command").equals("INVALID_MESSAGE")) {
 				log.warn(message.get("info"));
 			}
-
+//-------------判断register超时
+			registerTimeout();
+//--------------------------
 			switch (message.get("command").toString()) {
 				case "AUTHENTICATION_FAIL":
 					log.warn(message.get("info"));
@@ -164,12 +168,12 @@ public class Control extends Thread {
 				case "RE_AUTHENTICATE":
 					return reAuthenticate(message, con);
 				case "SERVER_UPDATE":
-					return serverUpdate(message,con);
+					return serverUpdate(message, con);
 				case "REMOTE_PORT":
 					return romotePort(message, con);
 				case "RECONNECT_SUCCESS":
 					return reconnectSuccess(message, con);
-					//以上正确 重连接后传给子节点
+				//以上正确 重连接后传给子节点
 
 				case "DELETE_FATHER":
 					if (reconnectUse.get("father") != null) {
@@ -179,7 +183,7 @@ public class Control extends Thread {
 
 				case "ROOT_RECONNECT":
 					rootReconnect.clear();
-					rootReconnect.put("info",message.get("ROOT_RECONNECT"));
+					rootReconnect.put("info", message.get("ROOT_RECONNECT"));
 					return false;
 				default:
 					String ms = "the message contained an unknown command:" + message.get("command");
@@ -392,6 +396,10 @@ public class Control extends Thread {
 			//save the cli info and let the cli wait for the approval from other servers
 			connectionMap.put(message.get("username").toString(), con);
 			countMap.put(message.get("username").toString(), 0);
+//----------------------------------
+			registerTime.put(message.get("username").toString(), System.currentTimeMillis());
+//-------------------------------
+
 			usersinfo.put(message.get("username"), message.get("secret"));
 			broadcast(lockrequest, serverconnections);
 			return false;
@@ -448,7 +456,11 @@ public class Control extends Thread {
 			String ms = "received LOCK_DENIED from an unauthenticated server";
 			return sendInvalidMessage(con, ms);
 		}
-		usersinfo.remove(message.get("username"), message.get("secret"));
+		try {
+			usersinfo.remove(message.get("username"));
+		} catch (Exception e) {
+			e.getMessage();
+		}
 		if (connectionMap.get(message.get("username")) != null) {
 			JSONObject registerFail = new JSONObject();
 			registerFail.put("command", "REGISTER_FAILED");
@@ -497,7 +509,7 @@ public class Control extends Thread {
 		}
 	}
 
-	public boolean serverUpdate(JSONObject message, Connection con){
+	public boolean serverUpdate(JSONObject message, Connection con) {
 		String id = message.get("id").toString();
 		try {
 			JSONObject temp = new JSONObject();
@@ -505,7 +517,7 @@ public class Control extends Thread {
 			temp.put("port", message.get("port"));
 			temp.put("hostname", message.get("hostname"));
 			allServerLoad.put(id, temp);
-			sendToOthers(con,message.toJSONString(),serverconnections);
+			sendToOthers(con, message.toJSONString(), serverconnections);
 
 		} catch (Exception e) {
 			e.getMessage();
@@ -534,14 +546,14 @@ public class Control extends Thread {
 //-------------------------------------------------
 //如果有父就传fatherInfo到reconnectInfo
 			if (parent != null) {
-				JSONObject p =new JSONObject();
+				JSONObject p = new JSONObject();
 				p.put("ip", parent.getSocket().getInetAddress().getHostAddress());
 				p.put("port", connectionRemotePort.get(parent));
 				reconnectInfo.put("father", p);
-				if (nextRootNode !=null&&nextRootNode!= con) {
+				if (nextRootNode != null && nextRootNode != con) {
 					JSONObject renew = new JSONObject();
 					renew.put("ROOT_RECONNECT", p);
-					sentmessage(renew,nextRootNode);
+					sentmessage(renew, nextRootNode);
 				}
 			}
 
@@ -579,7 +591,7 @@ public class Control extends Thread {
 	}
 
 	public boolean reAuthenticate(JSONObject message, Connection con) throws IOException {
-		boolean b2=authenticate(message, con);
+		boolean b2 = authenticate(message, con);
 		if (!b2) {
 			try {
 				if (parent == null) {
@@ -600,10 +612,10 @@ public class Control extends Thread {
 			}
 
 			JSONObject m = new JSONObject();
-			m.put("command","RECONNECT_SUCCESS");
+			m.put("command", "RECONNECT_SUCCESS");
 			m.put("ip", con.getSocket().getLocalAddress().getHostAddress());
 			m.put("port", con.getSocket().getLocalPort());
-			sentmessage(m,con);
+			sentmessage(m, con);
 		}
 		return b2;
 	}
@@ -620,29 +632,28 @@ public class Control extends Thread {
 		reconnectInfo.put("info", m);
 		for (Connection c : serverconnections) {
 			if (c != parent) {
-				sentmessage(reconnectInfo,c);
+				sentmessage(reconnectInfo, c);
 			}
 		}
-		log.info("***** Reconnection success to : "+ip+":  "+port);
+		log.info("***** Reconnection success to : " + ip + ":  " + port);
 		return false;
 	}
 
-	public boolean romotePort(JSONObject message, Connection con)throws IOException {
+	public boolean romotePort(JSONObject message, Connection con) throws IOException {
 		JSONObject info = new JSONObject();
 		info.put("port", message.get("port"));
-		info.put("ip",con.getSocket().getInetAddress().getHostAddress());
+		info.put("ip", con.getSocket().getInetAddress().getHostAddress());
 		reconnectInfo.put("info", info);
 
 		try {
-			connectionRemotePort.put(con,Integer.parseInt(message.get("port").toString()));
+			connectionRemotePort.put(con, Integer.parseInt(message.get("port").toString()));
 		} catch (Exception e) {
 			e.getMessage();
 		}
-		log.info("Get Connected with: "+con.getSocket().getInetAddress().getHostAddress()+
-				"/ "+connectionRemotePort.get(con));
+		log.info("Get Connected with: " + con.getSocket().getInetAddress().getHostAddress() +
+				"/ " + connectionRemotePort.get(con));
 		return false;
 	}
-
 
 
 	/*
@@ -689,12 +700,12 @@ public class Control extends Thread {
 		connections.add(c);
 		serverconnections.add(c);
 
-		connectionRemotePort.put(c,Settings.getRemotePort());
+		connectionRemotePort.put(c, Settings.getRemotePort());
 		JSONObject p = new JSONObject();
 		p.put("command", "REMOTE_PORT");
 		p.put("port", Settings.getLocalPort());
 
-		sentmessage(p,c);
+		sentmessage(p, c);
 		putreconnectInfo(c);
 
 
@@ -736,12 +747,17 @@ public class Control extends Thread {
 //		log.warn("**************************"+serverconnections.size());
 
 		if (child != null) {
-			for (Connection key : child.keySet()) {
-				if (child.get(key) == 4) {
+			Iterator<Map.Entry<Connection, Integer>> it = child.entrySet().iterator();
+			while(it.hasNext()){
+				Map.Entry<Connection, Integer> entry = it.next();
+				Connection key = entry.getKey();
+				Integer value = entry.getValue();
+
+				if (value == 4) {
 					connectionClosed(key);
-					key.closeCon();
+
 					try {
-						child.remove(key);
+
 						JSONObject temp = new JSONObject();
 						temp = (JSONObject) reconnectInfo.get("info");
 						String ip = temp.get("ip").toString();
@@ -759,7 +775,8 @@ public class Control extends Thread {
 								reconnectInfo.remove("info");
 							}
 						}
-
+						it.remove();
+						key.closeCon();
 					} catch (Exception e) {
 						e.getMessage();
 					}
@@ -772,7 +789,6 @@ public class Control extends Thread {
 					child.put(key, i);
 				}
 			}
-
 		}
 
 		if (parent != null) {
@@ -785,11 +801,11 @@ public class Control extends Thread {
 						reconnection(rootReconnect);
 					} else {
 						reconnection(rootReconnect);
-						}
-					}catch (Exception e) {
-						e.getMessage();
 					}
+				} catch (Exception e) {
+					e.getMessage();
 				}
+			}
 
 
 		}
@@ -877,7 +893,7 @@ public class Control extends Thread {
 			JSONObject p = new JSONObject();
 			p.put("command", "REMOTE_PORT");
 			p.put("port", Settings.getLocalPort());
-			sentmessage(p,c);
+			sentmessage(p, c);
 
 			connections.add(c);
 			serverconnections.add(c);
@@ -910,7 +926,7 @@ public class Control extends Thread {
 
 
 	public void sendServerAnnounce(String msg) {
-		try{
+		try {
 
 			JSONObject announce = new JSONObject();
 			announce.put("command", msg);
@@ -929,34 +945,69 @@ public class Control extends Thread {
 	public static void childReconnection() {
 
 		try {
-			if (reconnectUse!=null&&reconnectUse.size() > 1) {
+			if (reconnectUse != null && reconnectUse.size() > 1) {
 				reconnection(reconnectUse);
 			} else {
 // 说明是根
 				JSONObject obj = new JSONObject();
 				obj.put("command", "RECONNECT_INFO");
 				setReconnectInfo(obj);
-				sentmessage(obj,nextRootNode);
+				sentmessage(obj, nextRootNode);
 				JSONObject temp = new JSONObject();
 //除了nextRootNode 删除父父节点，用同级重连接
-				temp.put("command","DELETE_FATHER");
-				sendToOthers(nextRootNode,temp.toJSONString(),serverconnections);
+				temp.put("command", "DELETE_FATHER");
+				sendToOthers(nextRootNode, temp.toJSONString(), serverconnections);
 			}
 
-		}catch (Exception z){
-			log.error("reconnection: "+z.getMessage());
+		} catch (Exception z) {
+			log.error("reconnection: " + z.getMessage());
 		}
 	}
+
 	public static void parentDo(Connection con) {
 		//作为父
 //		else if (this == Control.nextRootNode) {
 //
 //		}
-		for (Connection key : child.keySet()){
-			if (con==key) {
-				child.remove(key);
+		Iterator<Map.Entry<Connection, Integer>> it = child.entrySet().iterator();
+		while(it.hasNext()){
+			Map.Entry<Connection, Integer> entry = it.next();
+			Connection key = entry.getKey();
+			if (con == key) {
+				it.remove();
 			}
+		}
+	}
 
+	public static void registerTimeout()throws IOException {
+		if (registerTime.size() != 0) {
+			long now = System.currentTimeMillis();
+			Iterator<Map.Entry<String, Long>> it = registerTime.entrySet().iterator();
+			while(it.hasNext()){
+				Map.Entry<String, Long> entry = it.next();
+				String key = entry.getKey();
+				Long t = entry.getValue();
+				long gap = now - t;
+				if (t<6000) {
+					//----------------------Lock_deny
+					JSONObject lock_denied = new JSONObject();
+					lock_denied.put("command", "LOCK_DENIED");
+					lock_denied.put("username", key);
+					lock_denied.put("secret","default");
+					String lockdeny = lock_denied.toJSONString();
+					broadcast(lockdeny, serverconnections);
+					usersinfo.remove(key);
+//-------------------------regster_failed
+					JSONObject registerFail = new JSONObject();
+					registerFail.put("command", "REGISTER_FAILED");
+					registerFail.put("info", "Register time out, please try later!!");
+					sentmessage(registerFail, connectionMap.get(key));
+//===========clear map
+					connectionMap.remove(key);
+					registerTime.remove(key);
+					it.remove();
+				}
+			}
 		}
 	}
 }
