@@ -22,7 +22,6 @@ public class Control extends Thread {
 	private static JSONObject usersinfo;
 	private static HashMap<String, Connection> connectionMap;
 	private static HashMap<String, Integer> countMap;
-
 	private static HashMap<Connection, String> loginMap;
 	private static HashMap<String, Long> registerTime;
 	private static HashMap<String, JSONObject> allServerLoad;
@@ -42,6 +41,17 @@ public class Control extends Thread {
 	private static JSONObject reconnectInfo;
 	private static JSONObject reconnectUse;
 	private static JSONObject rootReconnect;
+//====================================
+// 每个服务器上存储的 从所有服务器上收到的最新消息的发出时间 时间是从消息里面取出来的
+// String 是服务器ID. 第二个是 消息到达第一个服务器的时间
+	private static HashMap<String, Long> LatestMesTime = new HashMap<String, Long>();
+	// 存放所有的消息 inputstream
+	private static LinkedList<JSONObject> AllMessage = new LinkedList<JSONObject>();
+	// 时间戳
+	static Long time = System.currentTimeMillis();
+//====================================
+
+
 
 	private static void setReconnectInfo(JSONObject obj) {
 		reconnectInfo = obj;
@@ -75,7 +85,10 @@ public class Control extends Thread {
 		child = new HashMap<Connection, Integer>();
 		rootReconnect = new JSONObject();
 		registerTime = new HashMap<String, Long>();
-
+//============================
+		LatestMesTime.put(Server.getId(),time);  //先给自己加上
+		log.warn("新建服务器之后的时间表 没有连接" + LatestMesTime);
+//============================
 
 		// start a listener
 		try {
@@ -123,6 +136,29 @@ public class Control extends Thread {
 
 //--------------------------
 			switch (message.get("command").toString()) {
+
+//==========================
+				case "NewServer": // 该消息用于一个新服务器加入系统时候广播出去 告诉所有服务器自己的加入
+					// 此消息里面必须包含 command = NewServer, ServerId = "123"
+					log.warn("老服务器上更新之前"+LatestMesTime);
+					String serverId = message.get("serverId").toString();
+					Long initialValue = (Long) message.get("time");
+					log.warn(serverId);
+					log.warn(initialValue);
+					LatestMesTime.put(serverId, initialValue);
+					log.warn("老服务器上的时间表"+ LatestMesTime);
+					sendToOthers(con, message.toJSONString(), connections);
+					return false;
+				case "update":  //这个消息表示是 服务器给你的它的时间表，根据这个update自己的
+					log.warn("start updating");
+					sendAsNewServer(con);
+					return updateMesTime(message);
+				case "CatchUp":    //server收到对面的时间表 要进行消息的对齐
+					//第一个参数应该是别人消息里拿出来的latestmestime
+					return Catch(message, AllMessage, con);
+//==========================
+
+
 				case "AUTHENTICATION_FAIL":
 					log.warn(message.get("info"));
 					return true;
@@ -267,10 +303,10 @@ public class Control extends Thread {
 	}
 
 	public boolean serverAnnounce(JSONObject message, Connection con) throws IOException {
-		if (message.size() != 5) {
-			String ms = "incorrect message";
-			return sendInvalidMessage(con, ms);
-		}
+//		if (message.size() != 5) {
+//			String ms = "incorrect message";
+//			return sendInvalidMessage(con, ms);
+//		}
 		if (!serverconnections.contains(con)) {
 			String ms = "received SERVER_ANNOUNCE from an unauthenticated server";
 			return sendInvalidMessage(con, ms);
@@ -644,6 +680,10 @@ public class Control extends Thread {
 			serverconnections.add(con);
 
 			child.put(con, 0);
+
+//==============================
+			sendToNewComingServer(con);
+//==============================
 //---------------------------------
 			if (reconnectInfo != null) {
 //一定有父或子
@@ -691,6 +731,9 @@ public class Control extends Thread {
 			m.put("ip", con.getSocket().getLocalAddress().getHostAddress());
 			m.put("port", con.getSocket().getLocalPort());
 			sentmessage(m, con);
+//===================
+			sendLatestMesTime(con);  //把时间表发给对方
+//===================
 		}
 		return b2;
 	}
@@ -843,6 +886,9 @@ public class Control extends Thread {
 
 	public boolean doActivity() {
 
+		log.warn("@@@@@@@@@@@ reconnectInfo"+reconnectInfo);
+		log.warn("############### reconnectUse"+reconnectUse);
+
 		try {
 		if (registerTime.size() != 0) {
 
@@ -933,28 +979,58 @@ public class Control extends Thread {
 		writer.flush();
 	}
 
-	public synchronized static void broadcast(String msg, ArrayList<Connection> connections) throws IOException {
-		for (Connection con : connections) {
-			Socket s = con.getSocket();
-			BufferedWriter writer = new BufferedWriter(
-					new OutputStreamWriter(s.getOutputStream(),
-							"UTF-8"));
-			writer.write(msg + "\n");
-			writer.flush();
+//	public synchronized static void broadcast(String msg, ArrayList<Connection> connections) throws IOException {
+//		for (Connection con : connections) {
+//			Socket s = con.getSocket();
+//			BufferedWriter writer = new BufferedWriter(
+//					new OutputStreamWriter(s.getOutputStream(),
+//							"UTF-8"));
+//			writer.write(msg + "\n");
+//			writer.flush();
+//		}
+//	}
+
+
+//===========================================
+
+	public synchronized static void broadcast(String msg,
+											  ArrayList<Connection> connections) throws IOException {
+		try {
+			for (Connection con : connections) {
+				Socket s = con.getSocket();
+				BufferedWriter writer = new BufferedWriter(
+						new OutputStreamWriter(s.getOutputStream(), "UTF-8"));
+				JSONParser parser = new JSONParser();
+				JSONObject message = (JSONObject) parser.parse(msg);  //先把msg covert to json
+				//添加serverid  time
+				if(message.get("serverId") == null) {
+					message.put("serverId", Server.getId());
+					message.put("time", time);
+				}
+				AllMessage.add(message); //加入buffer
+				String activity = message.toJSONString();
+				writer.write(activity + "\n");
+				writer.flush();
+			}
+		} catch (Exception e) {
+			// TODO: handle exception
+			e.printStackTrace();
 		}
 	}
 
-	public int judgeConnection(int trigger, Connection con) {
-		if (trigger == 3) {
-			freeze = true;
-			connections.remove(con);
-			if (serverconnections.contains(con)) {
-				serverconnections.remove(con);
-			}
-			con.closeCon();
+
+//===========================================
+public int judgeConnection(int trigger, Connection con) {
+	if (trigger == 3) {
+		freeze = true;
+		connections.remove(con);
+		if (serverconnections.contains(con)) {
+			serverconnections.remove(con);
 		}
-		return trigger + 1;
+		con.closeCon();
 	}
+	return trigger + 1;
+}
 
 	public static void sendToOthers(Connection con, String msg, ArrayList<Connection> connections) throws IOException {
 		int index = connections.indexOf(con);
@@ -1175,5 +1251,74 @@ public class Control extends Thread {
 		announce3.put("port", Settings.getLocalPort());
 		allServerLoad.put(Server.getId(), announce3);
 	}
+
+//============================================
+	public static Boolean Catch(HashMap<String, Long> LatestMesTime,
+							LinkedList<JSONObject> allMessage2, Connection conn) {
+	try {
+		for (int i = 0; i < LatestMesTime.size(); i++) {
+			JSONObject message = allMessage2.get(i);
+			String serverId = message.get("serverId").toString();
+			Long timeStamp = (Long) message.get("time");
+			Long time = LatestMesTime.get(serverId);
+			if (timeStamp > time) {
+				sentmessage(message, conn);
+			}
+		}
+		return false;
+	} catch (Exception e) {
+		e.printStackTrace();
+	}
+
+	return true;
+}
+
+	public static HashMap<String, Long> getLatestMesTime() {
+		return LatestMesTime;
+	}
+
+
+	//服务器进入系统的第一条消息 宣告自己是一个新加入的server
+	public boolean sendAsNewServer(Connection con) throws IOException {
+		log.warn("开始发送自己的时间表 我是一个新加入的服务器");
+		JSONObject msg = new JSONObject();
+		msg.put("command", "NewServer");
+		msg.put("serverId", Server.getId());
+		msg.put("time",time);
+		sentmessage(msg, con);
+
+		return false;
+	}
+
+	//发送自己的hashmap给重连上的server
+	public static boolean sendLatestMesTime(Connection con) throws IOException {
+		JSONObject msg = new JSONObject();
+		msg.putAll(getLatestMesTime());  //这里可能有bug
+		msg.put("command","CatchUp");
+		sentmessage(msg, con);
+		return false;
+	}
+
+	//新加入的服务器 收到一个hashmap 用此方法更新
+	public static boolean updateMesTime(HashMap<String, Long> receivedMesTime) {
+		log.warn("这是我收到的对面给我的时间表"+receivedMesTime);
+		for(String s : receivedMesTime.keySet()) {
+			if(!LatestMesTime.containsKey(s) && !s.equals("command")) {
+				LatestMesTime.put(s, time);
+			}
+		}
+		log.warn("这个更新过之后的时间表"+LatestMesTime);
+		return false;
+	}
+
+	public static boolean sendToNewComingServer(Connection conn) throws IOException{
+		JSONObject msg = new JSONObject();
+		msg.putAll(getLatestMesTime());  //这里可能有bug
+		msg.put("command","update");
+		sentmessage(msg, conn);
+		return false;
+	}
+//============================================
+
 
 }
