@@ -72,6 +72,7 @@ public class Connection extends Thread {
 			}
 			log.debug("connection closed to "+Settings.socketAddress(socket));
 			Control.getInstance().connectionClosed(this);
+
 			in.close();
 
 

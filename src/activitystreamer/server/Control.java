@@ -118,7 +118,7 @@ public class Control extends Thread {
 	 */
 	public synchronized boolean process(Connection con, String msg) {
 		try {
-//			log.warn("============" + msg);
+			log.warn("============" + msg);
 			JSONParser parser = new JSONParser();
 			JSONObject message = (JSONObject) parser.parse(msg);
 //-------------------------------Invalid message : No command
@@ -140,6 +140,7 @@ public class Control extends Thread {
 //==========================
 				case "NewServer": // 该消息用于一个新服务器加入系统时候广播出去 告诉所有服务器自己的加入
 					// 此消息里面必须包含 command = NewServer, ServerId = "123"
+
 					log.warn("老服务器上更新之前"+LatestMesTime);
 					String serverId = message.get("serverId").toString();
 					Long initialValue = (Long) message.get("time");
@@ -164,7 +165,11 @@ public class Control extends Thread {
 					return true;
 
 				case "AUTHENTICATE":
-					return authenticate(message, con);
+					boolean b = authenticate(message, con);
+					if (!b) {
+						sendToNewComingServer(con);
+					}
+					return b;
 				case "usersinfo":
 					usersinfo = new JSONObject();
 					usersinfo = message;
@@ -218,7 +223,8 @@ public class Control extends Thread {
 
 				case "ROOT_RECONNECT":
 					rootReconnect.clear();
-					rootReconnect.put("info", message.get("ROOT_RECONNECT"));
+					rootReconnect.put("command","RECONNECT_INFO");
+					rootReconnect.put("info", message.get("info"));
 					return false;
 
 				case "LOAD_REQUEST":
@@ -664,7 +670,9 @@ public class Control extends Thread {
 				reconnectInfo.put("father", p);
 				if (nextRootNode != null && nextRootNode != con) {
 					JSONObject renew = new JSONObject();
-					renew.put("ROOT_RECONNECT", p);
+
+					renew.put("command","ROOT_RECONNECT");
+					renew.put("info", p);
 					sentmessage(renew, nextRootNode);
 				}
 			}
@@ -682,7 +690,7 @@ public class Control extends Thread {
 			child.put(con, 0);
 
 //==============================
-			sendToNewComingServer(con);
+//			sendToNewComingServer(con);
 //==============================
 //---------------------------------
 			if (reconnectInfo != null) {
@@ -834,6 +842,9 @@ public class Control extends Thread {
 		p.put("command", "REMOTE_PORT");
 		p.put("port", Settings.getLocalPort());
 
+
+//==================
+		sendToNewComingServer(c);
 //----------存自己的信息
 		JSONObject announce3 = new JSONObject();
 		announce3.put("load", 0);
@@ -971,12 +982,15 @@ public class Control extends Thread {
 	}
 
 	public static void sentmessage(JSONObject json, Connection con) throws IOException {
-		Socket s = con.getSocket();
-		BufferedWriter writer = new BufferedWriter(
-				new OutputStreamWriter(s.getOutputStream(),
-						"UTF-8"));
-		writer.write(json.toJSONString() + "\n");
-		writer.flush();
+
+			Socket s = con.getSocket();
+			BufferedWriter writer = new BufferedWriter(
+					new OutputStreamWriter(s.getOutputStream(),
+							"UTF-8"));
+			writer.write(json.toJSONString() + "\n");
+			writer.flush();
+			log.warn("#############");
+
 	}
 
 //	public synchronized static void broadcast(String msg, ArrayList<Connection> connections) throws IOException {
@@ -1051,7 +1065,7 @@ public int judgeConnection(int trigger, Connection con) {
 
 //两种情况，有父节点和根节点
 			if (reconnectUse.get("father") != null) {
-				temp = (JSONObject) reconnectUse.get("info");
+				temp = (JSONObject) reconnectUse.get("father");
 				int port = Integer.parseInt(temp.get("port").toString());
 				String ip = temp.get("ip").toString();
 				s = new Socket(ip, port);
@@ -1256,7 +1270,7 @@ public int judgeConnection(int trigger, Connection con) {
 	public static Boolean Catch(HashMap<String, Long> LatestMesTime,
 							LinkedList<JSONObject> allMessage2, Connection conn) {
 	try {
-		for (int i = 0; i < LatestMesTime.size(); i++) {
+		for (int i = 0; i < allMessage2.size(); i++) {
 			JSONObject message = allMessage2.get(i);
 			String serverId = message.get("serverId").toString();
 			Long timeStamp = (Long) message.get("time");
