@@ -87,7 +87,7 @@ public class Control extends Thread {
 		registerTime = new HashMap<String, Long>();
 //============================
 		LatestMesTime.put(Server.getId(),time);  //先给自己加上
-		log.warn("新建服务器之后的时间表 没有连接" + LatestMesTime);
+
 //============================
 
 		// start a listener
@@ -118,7 +118,7 @@ public class Control extends Thread {
 	 */
 	public synchronized boolean process(Connection con, String msg) {
 		try {
-			log.warn("============" + msg);
+
 			JSONParser parser = new JSONParser();
 			JSONObject message = (JSONObject) parser.parse(msg);
 //-------------------------------Invalid message : No command
@@ -141,13 +141,12 @@ public class Control extends Thread {
 				case "NewServer": // 该消息用于一个新服务器加入系统时候广播出去 告诉所有服务器自己的加入
 					// 此消息里面必须包含 command = NewServer, ServerId = "123"
 
-					log.warn("老服务器上更新之前"+LatestMesTime);
+
 					String serverId = message.get("serverId").toString();
 					Long initialValue = (Long) message.get("time");
-					log.warn(serverId);
-					log.warn(initialValue);
+
 					LatestMesTime.put(serverId, initialValue);
-					log.warn("老服务器上的时间表"+ LatestMesTime);
+
 					sendToOthers(con, message.toJSONString(), connections);
 					return false;
 				case "update":  //这个消息表示是 服务器给你的它的时间表，根据这个update自己的
@@ -897,8 +896,8 @@ public class Control extends Thread {
 
 	public boolean doActivity() {
 
-		log.warn("@@@@@@@@@@@ reconnectInfo"+reconnectInfo);
-		log.warn("############### reconnectUse"+reconnectUse);
+//		log.warn("@@@@@@@@@@@ reconnectInfo"+reconnectInfo);
+//		log.warn("############### reconnectUse"+reconnectUse);
 
 		try {
 		if (registerTime.size() != 0) {
@@ -916,7 +915,7 @@ public class Control extends Thread {
 				Connection key = entry.getKey();
 				Integer value = entry.getValue();
 
-				if (value == 4) {
+				if (value == 3) {
 					connectionClosed(key);
 
 					try {
@@ -956,7 +955,7 @@ public class Control extends Thread {
 
 		if (parent != null) {
 			triggerParent = judgeConnection(triggerParent, parent);
-			if (triggerParent == 4) {
+			if (triggerParent == 3) {
 				parent.closeCon();
 				connectionClosed(parent);
 				try {
@@ -989,7 +988,7 @@ public class Control extends Thread {
 							"UTF-8"));
 			writer.write(json.toJSONString() + "\n");
 			writer.flush();
-			log.warn("#############");
+
 
 	}
 
@@ -1003,7 +1002,6 @@ public class Control extends Thread {
 //			writer.flush();
 //		}
 //	}
-
 
 //===========================================
 
@@ -1294,7 +1292,7 @@ public int judgeConnection(int trigger, Connection con) {
 
 	//服务器进入系统的第一条消息 宣告自己是一个新加入的server
 	public boolean sendAsNewServer(Connection con) throws IOException {
-		log.warn("开始发送自己的时间表 我是一个新加入的服务器");
+
 		JSONObject msg = new JSONObject();
 		msg.put("command", "NewServer");
 		msg.put("serverId", Server.getId());
@@ -1315,13 +1313,12 @@ public int judgeConnection(int trigger, Connection con) {
 
 	//新加入的服务器 收到一个hashmap 用此方法更新
 	public static boolean updateMesTime(HashMap<String, Long> receivedMesTime) {
-		log.warn("这是我收到的对面给我的时间表"+receivedMesTime);
 		for(String s : receivedMesTime.keySet()) {
 			if(!LatestMesTime.containsKey(s) && !s.equals("command")) {
 				LatestMesTime.put(s, time);
 			}
 		}
-		log.warn("这个更新过之后的时间表"+LatestMesTime);
+
 		return false;
 	}
 
