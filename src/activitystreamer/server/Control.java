@@ -252,8 +252,7 @@ public class Control extends Thread {
 	}
 
 	public boolean acitivityMessage(JSONObject message, Connection con) throws IOException {
-		if (message.get("username") == null || message.get("activity") == null
-				|| message.size() != 4) {
+		if (message.get("username") == null || message.get("activity") == null) {
 			String ms = "incorrect message";
 			return sendInvalidMessage(con, ms);
 		}
@@ -655,9 +654,6 @@ public class Control extends Thread {
 			String ms = "the received message did not contain a secret";
 			return sendInvalidMessage(con, ms);
 
-		} else if (message.size() != 2) {
-			String ms = "incorrect message";
-			return sendInvalidMessage(con, ms);
 		} else if (message.get("secret").equals(Settings.getSecret())) {
 
 			sentmessage(usersinfo, con);
