@@ -119,6 +119,7 @@ public class Control extends Thread {
 	public synchronized boolean process(Connection con, String msg) {
 		try {
 
+//			log.info(msg);
 			JSONParser parser = new JSONParser();
 			JSONObject message = (JSONObject) parser.parse(msg);
 //-------------------------------Invalid message : No command
@@ -402,7 +403,7 @@ public class Control extends Thread {
 
 	public boolean register(JSONObject message, Connection con) throws IOException {
 		if (message.get("secret") == null ||
-				message.get("username") == null || message.size() != 3) {
+				message.get("username") == null ) {
 			String ms = "incorrect message";
 			return sendInvalidMessage(con, ms);
 		}
@@ -458,7 +459,7 @@ public class Control extends Thread {
 			return sendInvalidMessage(con, ms);
 		}
 		if (message.get("secret") == null ||
-				message.get("username") == null || message.size() != 3) {
+				message.get("username") == null ) {
 			String ms = "incorrect message";
 			return sendInvalidMessage(con, ms);
 		}
@@ -494,7 +495,7 @@ public class Control extends Thread {
 
 	public boolean lockDenied(String msg, JSONObject message, Connection con) throws IOException {
 		if (message.get("secret") == null ||
-				message.get("username") == null || message.size() != 3) {
+				message.get("username") == null) {
 			String ms = "incorrect message";
 			return sendInvalidMessage(con, ms);
 		}
@@ -524,7 +525,7 @@ public class Control extends Thread {
 
 	public boolean lockAllowed(String msg, JSONObject message, Connection con) throws IOException {
 		if (message.get("secret") == null ||
-				message.get("username") == null || message.size() != 3) {
+				message.get("username") == null) {
 			String ms = "incorrect message";
 			return sendInvalidMessage(con, ms);
 		}
@@ -1193,7 +1194,7 @@ public int judgeConnection(int trigger, Connection con) {
 					String key = entry.getKey();
 					Long t = entry.getValue();
 					long gap = now - t;
-					log.warn(gap+"@@@@@@@@@@@@@"+now+"!!!"+t);
+//					log.warn(gap+"@@@@@@@@@@@@@"+now+"!!!"+t);
 					if (gap > 6000) {
 						//----------------------Lock_deny
 						JSONObject lock_denied = new JSONObject();
