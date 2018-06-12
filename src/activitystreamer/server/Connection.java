@@ -52,9 +52,17 @@ public class Connection extends Thread {
 		if(open){
 			log.info("closing connection "+Settings.socketAddress(socket));
 			try {
-				term=true;
-				inreader.close();
-				out.close();
+
+				if (Control.parent == this) {
+					Control.parent = null;
+					Control.childReconnection();
+				} else {
+					term=true;
+					inreader.close();
+					out.close();
+				}
+
+				Control.parentDo(this);
 			} catch (IOException e) {
 				// already closed?
 				log.error("received exception closing the connection "+Settings.socketAddress(socket)+": "+e);
@@ -79,19 +87,21 @@ public class Connection extends Thread {
 		} catch (IOException e) {
 			log.error("connection "+Settings.socketAddress(socket)+" closed with exception: "+e);
 			Control.getInstance().connectionClosed(this);
+
+			if (Control.parent==this) {
+				Control.parent = null;
+				Control.childReconnection();
+			}
+
+			Control.parentDo(this);
+			open = false;
+
+
 		}
 		//做为子重连接
 //		log.warn("!!!!!!!!!!!!");
 
-		if (Control.parent==this) {
-			Control.parent = null;
-			Control.childReconnection();
-		}
 
-		Control.parentDo(this);
-
-
-		open=false;
 	}
 	
 	public Socket getSocket() {

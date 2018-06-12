@@ -5,10 +5,12 @@ import java.net.*;
 import java.util.*;
 
 import activitystreamer.Server;
+import com.google.gson.JsonObject;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import activitystreamer.util.Settings;
+
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 
@@ -46,15 +48,15 @@ public class Control extends Thread {
 //// String 是服务器ID. 第二个是 消息到达第一个服务器的时间
 //	private static HashMap<String, Long> LatestMesTime = new HashMap<String, Long>();
 //	// 存放所有的消息 inputstream
-//	private static LinkedList<JSONObject> AllMessage = new LinkedList<JSONObject>();
+	private static LinkedList<JSONObject> AllMessage = new LinkedList<JSONObject>();
 //	// 时间戳
-//	static Long time=System.currentTimeMillis() ;
+	static Long time=System.currentTimeMillis() ;
 //====================================
 
 
-//	private long getTime() {
-//		return time = System.currentTimeMillis();
-//	}
+	private long getTime() {
+		return System.currentTimeMillis();
+	}
 
 
 	private static void setReconnectInfo(JSONObject obj) {
@@ -155,8 +157,8 @@ public class Control extends Thread {
 //					sendToOthers(con, message.toJSONString(), connections);
 //					return false;
 //				case "update":  //这个消息表示是 服务器给你的它的时间表，根据这个update自己的
-//					log.warn("start updating");
-//					sendAsNewServer(con);
+////					log.warn("start updating");
+////					sendAsNewServer(con);
 //					return updateMesTime(message);
 //				case "CatchUp":    //server收到对面的时间表 要进行消息的对齐
 //					//第一个参数应该是别人消息里拿出来的latestmestime
@@ -216,6 +218,15 @@ public class Control extends Thread {
 				case "REMOTE_PORT":
 					return romotePort(message, con);
 				case "RECONNECT_SUCCESS":
+
+					for (int i = 0; i < AllMessage.size(); i++) {
+
+						JSONObject buff = new JSONObject();
+						buff.put("command", "Buff");
+						buff.put("info",AllMessage.get(i));
+						sentmessage(buff,con);
+					}
+
 					return reconnectSuccess(message, con);
 				//以上正确 重连接后传给子节点
 
@@ -237,6 +248,31 @@ public class Control extends Thread {
 				case "TARGET_SEND_LOAD":
 					sentLoadOrNot(message, con);
 					return false;
+
+				case "Buff":
+					try {
+						JSONObject buf = (JSONObject) message.get("info");
+
+						if ((long)buf.get("time") > time) {
+
+							boolean m = true;
+							for (int j = 0; j < AllMessage.size(); j++) {
+								JSONObject t2 = AllMessage.get(j);
+								if ((buf.get("serverId").equals(t2.get("serverId")) && ((long)buf.get("time")==((long)t2.get("time"))))) {
+									m = false;
+									break;
+								}
+							}
+							if(m)
+								sendToOthers(con, buf.toJSONString(), connections);
+						}
+
+					} catch (Exception e) {
+						e.getMessage();
+					}
+
+					return false;
+
 				default:
 					String ms = "the message contained an unknown command:" + message.get("command");
 					return sendInvalidMessage(con, ms);
@@ -278,12 +314,11 @@ public class Control extends Thread {
 				broad.put("activity", act);
 //=================== 更改
 //
-//				//添加serverid  time
-//				if(broad.get("serverId") == null) {
-//					broad.put("serverId", Server.getId());
-//					broad.put("time", getTime());
-//				}
-//				AllMessage.add(broad); //加入buffer
+				//添加serverid  time
+					broad.put("serverId", Server.getId());
+					broad.put("time", getTime());
+
+				AllMessage.add(broad); //加入buffer
 
 //========================
 				String activity = broad.toJSONString();
@@ -302,12 +337,11 @@ public class Control extends Thread {
 
 //===================  更改
 //
-//			//添加serverid  time
-//			if(broad.get("serverId") == null) {
-//				broad.put("serverId", Server.getId());
-//				broad.put("time", getTime());
-//			}
-//			AllMessage.add(broad); //加入buffer
+			//添加serverid  time
+				broad.put("serverId", Server.getId());
+				broad.put("time", getTime());
+
+			AllMessage.add(broad); //加入buffer
 			String activity = broad.toJSONString();
 //========================
 			broadcast(activity, connections);
@@ -325,8 +359,12 @@ public class Control extends Thread {
 	public boolean acitivityBroadcast(JSONObject message, Connection con) throws IOException {
 		if (!serverconnections.contains(con)) {
 			String ms = "received ACTIVITY_BROADCAST from an unauthenticated server";
+
+//============================
+//==========
 			return sendInvalidMessage(con, ms);
 		}
+		AllMessage.add(message); //加入buffer
 		String activity = message.toJSONString();
 		sendToOthers(con, activity, connections);
 		return false;
@@ -765,6 +803,16 @@ public class Control extends Thread {
 			m.put("ip", con.getSocket().getLocalAddress().getHostAddress());
 			m.put("port", con.getSocket().getLocalPort());
 			sentmessage(m, con);
+
+//==============发buffer
+			for (int i = 0; i < AllMessage.size(); i++) {
+
+				JSONObject buff = new JSONObject();
+				buff.put("command", "Buff");
+				buff.put("info",AllMessage.get(i));
+				sentmessage(buff,con);
+			}
+
 //===================
 //			sendLatestMesTime(con);  //把时间表发给对方
 //===================
