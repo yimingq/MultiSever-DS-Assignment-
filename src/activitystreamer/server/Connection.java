@@ -51,6 +51,8 @@ public class Connection extends Thread {
 	public void closeCon(){
 		if(open){
 			log.info("closing connection "+Settings.socketAddress(socket));
+			String id = Control.id_Con.get(this);
+			Control.allServerLoad.remove(id);
 			try {
 
 				if (Control.parent == this) {

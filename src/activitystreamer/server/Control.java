@@ -26,7 +26,9 @@ public class Control extends Thread {
 	private static HashMap<String, Integer> countMap;
 	private static HashMap<Connection, String> loginMap;
 	private static HashMap<String, Long> registerTime;
-	private static HashMap<String, JSONObject> allServerLoad;
+	public static HashMap<String, JSONObject> allServerLoad;
+	public static HashMap<Connection,String> id_Con;
+
 	private static HashMap<Connection, Integer> connectionRemotePort;
 
 
@@ -87,6 +89,7 @@ public class Control extends Thread {
 		SERVERLIST = new HashMap<String, JSONObject>();
 		JSONObject thisServer = new JSONObject();
 		allServerLoad = new HashMap<String, JSONObject>();
+		id_Con = new HashMap< Connection,String>();
 		connectionRemotePort = new HashMap<Connection, Integer>();
 		child = new HashMap<Connection, Integer>();
 		rootReconnect = new JSONObject();
@@ -382,7 +385,7 @@ public class Control extends Thread {
 		log.debug("received announcement from " + message.get("id") + " load " +
 				message.get("load") + " at " +
 				message.get("hostname") + ":" + message.get("port"));
-
+		id_Con.put(con,message.get("id").toString());
 
 		redirection(message);
 
